@@ -2,9 +2,8 @@
 NDAI negotiation server client and dummy stub.
 
 When --ndai is set, the game uses this client to:
-- init/game/phase: kick off the server for a phase (wait for confirm)
-- enter/game/phase/power_name: each power enters (wait for confirm)
-- get_released_info/game/phase/round/power_name: each power gets released info per round
+- /init/game/phase: kick off the server for a phase (wait for confirm)
+- get_joint_statement/game/phase/power_name: each power gets joint statement
 
 Set NDAI_SERVER_URL in env (e.g. http://127.0.0.1:8080) or defaults to that.
 Run the dummy server with: python -m ai_diplomacy.ndai_server
@@ -17,16 +16,25 @@ import os
 import random
 from typing import Any, Dict
 
-# All powers for stub released-info; normalize to uppercase for keys
+# All powers for stub joint-statement; normalize to uppercase for keys
 STUB_POWERS = ["AUSTRIA", "ENGLAND", "FRANCE", "GERMANY", "ITALY", "RUSSIA", "TURKEY"]
 
-STUB_RELEASED_MESSAGES = [
-    "We should coordinate on the next move.",
-    "I am open to a non-aggression pact this phase.",
-    "My units will support your advance if you agree.",
-    "Let us discuss the situation in the center.",
-    "I have no hostile intentions toward you.",
-    "Perhaps we can find a mutually beneficial arrangement.",
+# Templates for joint statements: {self} = power_name, {other} = other power. Read as contract-style statements.
+STUB_JOINT_STATEMENT_TEMPLATES = [
+    "{other} agrees to support {self} in the Balkan theater.",
+    "{self} and {other} commit to a non-aggression pact in the Mediterranean.",
+    "{other} pledges military assistance to {self} for the upcoming campaign.",
+    "{self} and {other} agree to coordinate on the disposition of forces in the center.",
+    "{other} undertakes to refrain from hostile moves against {self} this season.",
+    "{self} and {other} declare a mutual interest in containing expansion in the east.",
+    "{other} agrees to facilitate {self}'s advance in exchange for future considerations.",
+    "{self} and {other} affirm a shared commitment to stability in the western front.",
+    "{other} commits to diplomatic support for {self} in the current phase.",
+    "{self} and {other} agree to joint action regarding the northern waters.",
+    "{other} pledges to coordinate convoy support with {self}.",
+    "{self} and {other} agree to mutual defense in the event of third-party aggression.",
+    "{other} agrees to help {self} with the Balkan war.",
+    "{self} and {other} formalize an understanding on sphere of influence.",
 ]
 
 logger = logging.getLogger("ndai_server")
@@ -37,14 +45,14 @@ def _base_url() -> str:
 
 
 async def init_game_phase(phase: str) -> bool:
-    """Call local_server/init/game/phase; wait for confirm. Returns True on success or on connection error (dummy mode)."""
+    """Call /init/game/phase; wait for confirm. Returns True on success or on connection error (dummy mode)."""
     try:
         import httpx
     except ImportError:
         logger.warning("httpx not installed; NDAI client will use dummy responses. pip install httpx")
         return True
     base = _base_url().rstrip("/")
-    url = f"{base}/local_server/init/game/phase"
+    url = f"{base}/init/game/phase"
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(url, json={"phase": phase})
@@ -60,33 +68,10 @@ async def init_game_phase(phase: str) -> bool:
         return True
 
 
-async def enter_game_phase(phase: str, power_name: str) -> bool:
-    """Call enter/game/phase/power_name; wait for confirm. Returns True on success or on connection error (dummy mode)."""
-    try:
-        import httpx
-    except ImportError:
-        return True
-    base = _base_url().rstrip("/")
-    url = f"{base}/enter/game/phase/{power_name}"
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json={"phase": phase})
-            r.raise_for_status()
-            data = r.json() if r.content else {}
-            if data.get("status") in ("ok", "confirm", "confirmed") or r.status_code == 200:
-                logger.info(f"NDAI enter confirmed for {power_name} in {phase}")
-                return True
-            logger.warning(f"NDAI enter returned unexpected response: {data}")
-            return True
-    except Exception as e:
-        logger.warning(f"NDAI enter_game_phase failed for {power_name}: {e}. Proceeding as dummy.")
-        return True
-
-
-async def get_released_info(phase: str, round_num: int, power_name: str) -> Dict[str, str]:
+async def get_joint_statement(phase: str, power_name: str) -> Dict[str, str]:
     """
-    Call get_released_info/game/phase/round/power_name; wait for response.
-    Returns a dict mapping other_power -> released info string, e.g. {"RUSSIA": "...", "ITALY": "..."}.
+    Call get_joint_statement/game/phase/power_name; wait for response.
+    Returns a dict mapping other_power -> joint statement string, e.g. {"RUSSIA": "...", "ITALY": "..."}.
     On connection error returns {} (dummy mode).
     """
     try:
@@ -94,20 +79,19 @@ async def get_released_info(phase: str, round_num: int, power_name: str) -> Dict
     except ImportError:
         return {}
     base = _base_url().rstrip("/")
-    url = f"{base}/get_released_info/game/{phase}/{round_num}/{power_name}"
+    url = f"{base}/get_joint_statement/game/{phase}/{power_name}"
+    logger.info(f"NDAI get_joint_statement: {url}")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(url)
             r.raise_for_status()
             data = r.json() if r.content else {}
-            # Accept {"released_info": {"RUSSIA": "...", ...}} or direct {"RUSSIA": "...", ...}
-            if "released_info" in data and isinstance(data["released_info"], dict):
-                return data["released_info"]
-            if isinstance(data, dict) and all(isinstance(v, str) for v in data.values()):
-                return data
+            if "joint_statement" in data and isinstance(data["joint_statement"], dict):
+                logger.info(f"NDAI get_joint_statement: {data['joint_statement']}")
+                return data["joint_statement"]
             return {}
     except Exception as e:
-        logger.warning(f"NDAI get_released_info failed for {power_name}: {e}. Using empty released info.")
+        logger.warning(f"NDAI get_joint_statement failed for {power_name}: {e}. Using empty joint statement.")
         return {}
 
 
@@ -125,13 +109,9 @@ def _run_stub_server():
                 data = json.loads(body.decode()) if body else {}
             except Exception:
                 data = {}
-            if self.path == "/local_server/init/game/phase":
+            if self.path == "/init/game/phase":
                 phase = data.get("phase", "unknown")
                 logger.info(f"Stub: init game phase {phase}")
-                response = {"status": "ok", "message": "confirmed"}
-            elif self.path.startswith("/enter/game/phase/"):
-                power_name = self.path.split("/")[-1]
-                logger.info(f"Stub: enter {power_name}")
                 response = {"status": "ok", "message": "confirmed"}
             else:
                 response = {"status": "ok"}
@@ -139,24 +119,21 @@ def _run_stub_server():
 
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
-            path = parsed.path
-            parts = [p for p in path.split("/") if p]
-            if len(parts) >= 5 and parts[0] == "get_released_info" and parts[1] == "game":
-                # get_released_info/game/phase/round/power_name
-                phase = parts[2]
-                round_num = parts[3]
-                power_name = parts[4].upper()
-                logger.info(f"Stub: get_released_info for {power_name} phase {phase} round {round_num}")
-                # Return random released info from other powers
+            parts = [p for p in parsed.path.split("/") if p]
+            if len(parts) >= 4 and parts[0] == "get_joint_statement" and parts[1] == "game":
+                phase, power_name = parts[2], parts[3].upper()
+                logger.info(f"Stub: get_joint_statement for {power_name} phase {phase}")
                 others = [p for p in STUB_POWERS if p != power_name]
-                num_released = random.randint(1, min(3, len(others)))
-                chosen = random.sample(others, num_released)
-                released_info = {
-                    p: random.choice(STUB_RELEASED_MESSAGES) + f" (phase {phase}, round {round_num})"
-                    for p in chosen
-                }
-                logger.info(f"Stub: returning released_info for {power_name}: {released_info}")
-                response = {"released_info": released_info}
+                num_chosen = random.randint(1, min(3, len(others)))
+                chosen = random.sample(others, num_chosen)
+                self_display = power_name.title()
+                joint_statement = {}
+                for p in chosen:
+                    other_display = p.title()
+                    template = random.choice(STUB_JOINT_STATEMENT_TEMPLATES)
+                    stmt = template.format(self=self_display, other=other_display)
+                    joint_statement[p] = f"{stmt} (phase {phase})"
+                response = {"joint_statement": joint_statement}
             else:
                 response = {}
             self._send_json(200, response)

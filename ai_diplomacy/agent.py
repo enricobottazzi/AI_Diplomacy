@@ -466,7 +466,7 @@ class DiplomacyAgent:
     async def generate_negotiation_diary_entry(self, game: "Game", game_history: GameHistory, log_file_path: str, ndai: bool = False):
         """
         Generates a diary entry summarizing negotiations and updates relationships.
-        When ndai=True, uses released information instead of messages for the diary context.
+        When ndai=True, uses joint statement instead of messages for the diary context.
         This method now includes comprehensive LLM interaction logging.
         """
         logger.info(f"[{self.power_name}] Generating negotiation diary entry for {game.current_short_phase}...")
@@ -488,34 +488,39 @@ class DiplomacyAgent:
             units_str, centers_str = get_board_state(board_state_dict, game)
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
-            section_label = "Released Information This Round" if ndai else "Messages This Round"
+            section_label = "Joint Statements This Round" if ndai else "Messages This Round"
             messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=game.current_short_phase)
             if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
                 messages_this_round = (
-                    "(No released information involving your power this round.)" if ndai
+                    "(No joint statements involving your power this round.)" if ndai
                     else "(No messages involving your power this round.)"
                 )
             elif ndai:
                 # When NDAI is enabled, drop the "MESSAGES TO/FROM YOU THIS ROUND" subheader so the prompt goes from section_label straight to the content
                 subheader = "**MESSAGES TO/FROM YOU THIS ROUND:**\n"
                 if messages_this_round.strip().startswith(subheader.strip()):
-                    messages_this_round = messages_this_round.replace(subheader, "", 1).lstrip()
+                    messages_this_round = messages_this_round.replace(subheader, "Each statement is signed by you and another power, this information is only available to the signers of the statement and not to other powers ", 1).lstrip()
+                # Format section headers for ndai log as "Joint statements with POWER:" instead of "Conversation with POWER:"
+                messages_this_round = messages_this_round.replace(" Conversation with ", "\n\nJoint statements with ")
 
             current_relationships_str = json.dumps(self.relationships)
             current_goals_str = json.dumps(self.goals)
             formatted_diary = self.format_private_diary_for_prompt()
 
             # Get ignored messages context
-            ignored_messages = game_history.get_ignored_messages_by_power(self.power_name)
-            ignored_context = ""
-            if ignored_messages:
-                ignored_context = "\n\nPOWERS NOT RESPONDING TO YOUR MESSAGES:\n"
-                for power, msgs in ignored_messages.items():
-                    ignored_context += f"{power}:\n"
-                    for msg in msgs[-2:]:  # Show last 2 ignored messages per power
-                        ignored_context += f"  - Phase {msg['phase']}: {msg['content'][:100]}...\n"
+            if ndai == False:
+                ignored_context = ""
             else:
-                ignored_context = "\n\nAll powers have been responsive to your messages."
+                ignored_messages = game_history.get_ignored_messages_by_power(self.power_name)
+                ignored_context = ""
+                if ignored_messages:
+                    ignored_context = "\n\nPOWERS NOT RESPONDING TO YOUR MESSAGES:\n"
+                    for power, msgs in ignored_messages.items():
+                        ignored_context += f"{power}:\n"
+                        for msg in msgs[-2:]:  # Show last 2 ignored messages per power
+                            ignored_context += f"  - Phase {msg['phase']}: {msg['content'][:100]}...\n"
+                else:
+                    ignored_context = "\n\nAll powers have been responsive to your messages."
 
             # Do aggressive preprocessing of the template to fix the problematic patterns
             # This includes removing any newlines or whitespace before JSON keys that cause issues
@@ -877,8 +882,8 @@ class DiplomacyAgent:
             units_str, centers_str = get_board_state(board_state_dict, game)
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
-            # Get recent negotiations for this phase
-            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=game.current_short_phase)
+            # Get recent negotiations for this phase (use phase_name: messages were stored for the completed phase, not game.current_short_phase which has already advanced)
+            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=phase_name)
             if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
                 messages_this_round = (
                     "(No messages involving your power this round.)"

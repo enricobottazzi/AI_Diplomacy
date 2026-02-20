@@ -22,7 +22,7 @@ os.environ["GRPC_POLL_STRATEGY"] = "poll"  # Use 'poll' for macOS compatibility
 from diplomacy import Game
 
 from ai_diplomacy.utils import get_valid_orders, gather_possible_orders, parse_prompts_dir_arg
-from ai_diplomacy.negotiations import conduct_negotiations
+from ai_diplomacy.negotiations import conduct_negotiations, conduct_ndai_negotiations
 from ai_diplomacy.planning import planning_phase
 from ai_diplomacy.game_history import GameHistory
 from ai_diplomacy.agent import DiplomacyAgent
@@ -376,11 +376,14 @@ async def main():
         # --- 4b. Pre-Order Generation Steps (Movement Phases Only) ---
         if current_short_phase.endswith("M"):
             if run_config.num_negotiation_rounds > 0:
-                game_history = await conduct_negotiations(
-                    game, agents, game_history, model_error_stats,
-                    max_rounds=run_config.num_negotiation_rounds, log_file_path=llm_log_file_path,
-                    ndai=getattr(run_config, "ndai", False),
-                )
+                ndai = getattr(run_config, "ndai", False)
+                if ndai:
+                    game_history = await conduct_ndai_negotiations(game, agents, game_history)
+                else:
+                    game_history = await conduct_negotiations(
+                        game, agents, game_history, model_error_stats,
+                        max_rounds=run_config.num_negotiation_rounds, log_file_path=llm_log_file_path,
+                    )
             if run_config.planning_phase:
                 await planning_phase(
                     game, agents, game_history, model_error_stats, log_file_path=llm_log_file_path,

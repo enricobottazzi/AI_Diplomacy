@@ -19,6 +19,35 @@ logger = logging.getLogger("negotiations")
 load_dotenv()
 
 
+async def conduct_ndai_negotiations(
+    game: "Game",
+    agents: Dict[str, DiplomacyAgent],
+    game_history: "GameHistory",
+) -> "GameHistory":
+    """Init NDAI server for the phase, get joint statement once per power, store as messages."""
+    phase = game.current_short_phase
+    active_powers = [p_name for p_name, p_obj in game.powers.items() if not p_obj.is_eliminated()]
+    logger.info("Starting NDAI negotiation phase.")
+    await ndai_server.init_game_phase(phase)
+    for power_name in active_powers:
+        for other_power, text in (await ndai_server.get_joint_statement(phase, power_name) or {}).items():
+            if not text or not other_power or other_power == power_name:
+                logger.info(f"Skipping joint statement from {other_power} to {power_name} because it's empty or the same power.")
+                continue
+            text = text.strip()
+            logger.info(f"Adding joint statement from {other_power} to {power_name}: {text[:100]}...")
+            game.add_message(
+                Message(phase=phase, sender=other_power, recipient=power_name, message=text, time_sent=None)
+            )
+            game_history.add_message(phase, other_power, power_name, text)
+            if power_name in agents:
+                agents[power_name].add_journal_entry(
+                    f"Received joint statement from {other_power} in {phase}: {text[:100]}..."
+                )
+    logger.info("NDAI negotiation phase complete.")
+    return game_history
+
+
 async def conduct_negotiations(
     game: "Game",
     agents: Dict[str, DiplomacyAgent],
@@ -26,7 +55,6 @@ async def conduct_negotiations(
     model_error_stats: Dict[str, Dict[str, int]],
     log_file_path: str,
     max_rounds: int = 3,
-    ndai: bool = False,
 ):
     """
     Conducts a round-robin conversation among all non-eliminated powers.
@@ -57,28 +85,6 @@ async def conduct_negotiations(
         logger.info(f"Eliminated powers (skipped): {eliminated_powers}")
     else:
         logger.info("No eliminated powers yet.")
-
-    phase = game.current_short_phase
-
-    if ndai:
-        # NDAI flow: init server, each power enters, then each round get_released_info per power
-        await ndai_server.init_game_phase(phase)
-        for power_name in active_powers:
-            await ndai_server.enter_game_phase(phase, power_name)
-        for round_index in range(max_rounds):
-            logger.info(f"NDAI negotiation round {round_index + 1}/{max_rounds}: fetching released info.")
-            for power_name in active_powers:
-                released = await ndai_server.get_released_info(phase, round_index + 1, power_name)
-                logger.info(f"Released info for {power_name}: {released}")
-                # Store released info as messages (other_power -> power_name)
-                for other_power, text in (released or {}).items():
-                    if text and other_power and other_power != power_name:
-                        game_history.add_message(phase, other_power, power_name, text.strip())
-                        logger.info(f"Added message: {other_power} -> {power_name}: {text.strip()}")
-                    else:
-                        logger.info(f"No message added for {other_power} -> {power_name}")
-        logger.info("NDAI negotiation phase complete.")
-        return game_history
 
     # ── new tracking for consecutive private messages ───────────────
     last_sent_round: Dict[tuple[str, str], int] = {}
