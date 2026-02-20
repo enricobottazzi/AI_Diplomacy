@@ -23,28 +23,35 @@ async def conduct_ndai_negotiations(
     game: "Game",
     agents: Dict[str, DiplomacyAgent],
     game_history: "GameHistory",
+    model_error_stats: Dict[str, Dict[str, int]],
+    log_file_path: str,
+    max_rounds: int = 3,
 ) -> "GameHistory":
-    """Init NDAI server for the phase, get joint statement once per power, store as messages."""
+    """Run NDAI zone negotiations and store only agreed joint statements."""
     phase = game.current_short_phase
-    active_powers = [p_name for p_name, p_obj in game.powers.items() if not p_obj.is_eliminated()]
     logger.info("Starting NDAI negotiation phase.")
-    await ndai_server.init_game_phase(phase)
-    for power_name in active_powers:
-        for other_power, text in (await ndai_server.get_joint_statement(phase, power_name) or {}).items():
-            if not text or not other_power or other_power == power_name:
-                logger.info(f"Skipping joint statement from {other_power} to {power_name} because it's empty or the same power.")
-                continue
-            text = text.strip()
-            logger.info(f"Adding joint statement from {other_power} to {power_name}: {text[:100]}...")
-            game.add_message(
-                Message(phase=phase, sender=other_power, recipient=power_name, message=text, time_sent=None)
+
+    agreed_statements = await ndai_server.run_ndai_negotiations(
+        game, agents, game_history, model_error_stats, log_file_path, max_rounds
+    )
+
+    for (proposer, accepter), text in agreed_statements.items():
+        text = text.strip()
+        logger.info(f"[NDAI] Joint statement disclosed: {proposer} <-> {accepter}: {text[:100]}...")
+        game.add_message(
+            Message(phase=phase, sender=proposer, recipient=accepter, message=text, time_sent=None)
+        )
+        game_history.add_message(phase, proposer, accepter, text)
+        if proposer in agents:
+            agents[proposer].add_journal_entry(
+                f"NDAI joint statement agreed with {accepter} in {phase}: {text[:100]}..."
             )
-            game_history.add_message(phase, other_power, power_name, text)
-            if power_name in agents:
-                agents[power_name].add_journal_entry(
-                    f"Received joint statement from {other_power} in {phase}: {text[:100]}..."
-                )
-    logger.info("NDAI negotiation phase complete.")
+        if accepter in agents:
+            agents[accepter].add_journal_entry(
+                f"NDAI joint statement agreed with {proposer} in {phase}: {text[:100]}..."
+            )
+
+    logger.info(f"NDAI negotiation phase complete. {len(agreed_statements)} statement(s) disclosed.")
     return game_history
 
 
@@ -127,6 +134,7 @@ async def conduct_negotiations(
                     agent_private_diary_str=agent.format_private_diary_for_prompt(),
                     negotiation_round=round_index + 1,
                     max_negotiation_rounds=max_rounds,
+                    ndai=False,
                 )
             )
             power_names_for_tasks.append(power_name)

@@ -442,10 +442,11 @@ class BaseModelClient:
         agent_private_diary_str: Optional[str] = None,  # Added
         negotiation_round: Optional[int] = None,
         max_negotiation_rounds: Optional[int] = None,
+        ndai: bool = False,
     ) -> str:
-        # MINIMAL CHANGE: Just change to load unformatted version conditionally
-        # Check if country-specific prompts are enabled
-        if config.COUNTRY_SPECIFIC_PROMPTS:
+        if ndai:
+            instructions = load_prompt(get_prompt_path("ndai_conversation_instructions.txt"), prompts_dir=self.prompts_dir)
+        elif config.COUNTRY_SPECIFIC_PROMPTS:
             # Try to load country-specific version first
             country_specific_file = get_prompt_path(f"conversation_instructions_{power_name.lower()}.txt")
             instructions = load_prompt(country_specific_file, prompts_dir=self.prompts_dir)
@@ -563,6 +564,7 @@ class BaseModelClient:
         agent_private_diary_str: Optional[str] = None,
         negotiation_round: Optional[int] = None,
         max_negotiation_rounds: Optional[int] = None,
+        ndai: bool = False,
     ) -> List[Dict[str, str]]:
         """
         Generates a negotiation message, considering agent state.
@@ -601,6 +603,7 @@ class BaseModelClient:
                 agent_private_diary_str=agent_private_diary_str,
                 negotiation_round=negotiation_round,
                 max_negotiation_rounds=max_negotiation_rounds,
+                ndai=ndai,
             )
 
             logger.debug(f"[{self.model_name}] Conversation prompt for {power_name}:\n{raw_input_prompt}")

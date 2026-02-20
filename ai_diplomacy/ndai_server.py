@@ -1,160 +1,176 @@
 """
-NDAI negotiation server client and dummy stub.
+NDAI zone negotiation server.
 
-When --ndai is set, the game uses this client to:
-- /init/game/phase: kick off the server for a phase (wait for confirm)
-- get_joint_statement/game/phase/power_name: each power gets joint statement
-
-Set NDAI_SERVER_URL in env (e.g. http://127.0.0.1:8080) or defaults to that.
-Run the dummy server with: python -m ai_diplomacy.ndai_server
+Runs inside the TEE. All messages are discarded on exit except
+PROPOSE+ACCEPT joint statements.
 """
 
 import asyncio
-import json
+import copy
 import logging
-import os
 import random
-from typing import Any, Dict
+from typing import Dict, List, Tuple, TYPE_CHECKING
 
-# All powers for stub joint-statement; normalize to uppercase for keys
-STUB_POWERS = ["AUSTRIA", "ENGLAND", "FRANCE", "GERMANY", "ITALY", "RUSSIA", "TURKEY"]
+from .utils import gather_possible_orders, normalize_recipient_name
 
-# Templates for joint statements: {self} = power_name, {other} = other power. Read as contract-style statements.
-STUB_JOINT_STATEMENT_TEMPLATES = [
-    "{other} agrees to support {self} in the Balkan theater.",
-    "{self} and {other} commit to a non-aggression pact in the Mediterranean.",
-    "{other} pledges military assistance to {self} for the upcoming campaign.",
-    "{self} and {other} agree to coordinate on the disposition of forces in the center.",
-    "{other} undertakes to refrain from hostile moves against {self} this season.",
-    "{self} and {other} declare a mutual interest in containing expansion in the east.",
-    "{other} agrees to facilitate {self}'s advance in exchange for future considerations.",
-    "{self} and {other} affirm a shared commitment to stability in the western front.",
-    "{other} commits to diplomatic support for {self} in the current phase.",
-    "{self} and {other} agree to joint action regarding the northern waters.",
-    "{other} pledges to coordinate convoy support with {self}.",
-    "{self} and {other} agree to mutual defense in the event of third-party aggression.",
-    "{other} agrees to help {self} with the Balkan war.",
-    "{self} and {other} formalize an understanding on sphere of influence.",
-]
+if TYPE_CHECKING:
+    from .game_history import GameHistory
+    from .agent import DiplomacyAgent
+    from diplomacy import Game
 
 logger = logging.getLogger("ndai_server")
 
-# Base URL for the NDAI server (no trailing slash)
-def _base_url() -> str:
-    return os.environ.get("NDAI_SERVER_URL", "http://127.0.0.1:8080")
+
+def _bump_error(model_error_stats, model_name, power_name):
+    bucket = model_error_stats.setdefault(
+        model_name if model_name in model_error_stats else power_name, {}
+    )
+    bucket["conversation_errors"] = bucket.get("conversation_errors", 0) + 1
 
 
-async def init_game_phase(phase: str) -> bool:
-    """Call /init/game/phase; wait for confirm. Returns True on success or on connection error (dummy mode)."""
-    try:
-        import httpx
-    except ImportError:
-        logger.warning("httpx not installed; NDAI client will use dummy responses. pip install httpx")
-        return True
-    base = _base_url().rstrip("/")
-    url = f"{base}/init/game/phase"
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json={"phase": phase})
-            r.raise_for_status()
-            data = r.json() if r.content else {}
-            if data.get("status") in ("ok", "confirm", "confirmed") or r.status_code == 200:
-                logger.info(f"NDAI init game phase confirmed for {phase}")
-                return True
-            logger.warning(f"NDAI init returned unexpected response: {data}")
-            return True  # proceed anyway in dummy mode
-    except Exception as e:
-        logger.warning(f"NDAI init_game_phase failed (server may be down): {e}. Proceeding as dummy.")
-        return True
-
-
-async def get_joint_statement(phase: str, power_name: str) -> Dict[str, str]:
+async def run_ndai_negotiations(
+    game: "Game",
+    agents: Dict[str, "DiplomacyAgent"],
+    game_history: "GameHistory",
+    model_error_stats: Dict[str, Dict[str, int]],
+    log_file_path: str,
+    max_rounds: int = 3,
+) -> Dict[Tuple[str, str], str]:
     """
-    Call get_joint_statement/game/phase/power_name; wait for response.
-    Returns a dict mapping other_power -> joint statement string, e.g. {"RUSSIA": "...", "ITALY": "..."}.
-    On connection error returns {} (dummy mode).
+    Run NDAI zone negotiations.  Returns agreed (proposer, accepter) -> text.
     """
-    try:
-        import httpx
-    except ImportError:
-        return {}
-    base = _base_url().rstrip("/")
-    url = f"{base}/get_joint_statement/game/{phase}/{power_name}"
-    logger.info(f"NDAI get_joint_statement: {url}")
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url)
-            r.raise_for_status()
-            data = r.json() if r.content else {}
-            if "joint_statement" in data and isinstance(data["joint_statement"], dict):
-                logger.info(f"NDAI get_joint_statement: {data['joint_statement']}")
-                return data["joint_statement"]
-            return {}
-    except Exception as e:
-        logger.warning(f"NDAI get_joint_statement failed for {power_name}: {e}. Using empty joint statement.")
-        return {}
+    phase = game.current_short_phase
+    active_powers = [p for p, obj in game.powers.items() if not obj.is_eliminated()]
 
+    logger.info(f"[NDAI] Starting phase {phase} | powers={active_powers} | rounds={max_rounds}")
 
-# --- Dummy stub server (run with: python -m ai_diplomacy.ndai_server) ---
+    ephemeral_history = copy.deepcopy(game_history)
+    pending_proposals: Dict[Tuple[str, str], str] = {}
+    agreed_statements: Dict[Tuple[str, str], str] = {}
+    last_sent_round: Dict[Tuple[str, str], int] = {}
+    awaiting_reply: Dict[Tuple[str, str], bool] = {}
 
-def _run_stub_server():
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-    import urllib.parse
+    for rnd in range(max_rounds):
+        logger.info(f"[NDAI] ─── Round {rnd + 1}/{max_rounds} ───")
 
-    class StubHandler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length) if length else b""
-            try:
-                data = json.loads(body.decode()) if body else {}
-            except Exception:
-                data = {}
-            if self.path == "/init/game/phase":
-                phase = data.get("phase", "unknown")
-                logger.info(f"Stub: init game phase {phase}")
-                response = {"status": "ok", "message": "confirmed"}
+        # ── Concurrent LLM calls ──
+        tasks, task_powers = [], []
+        for pname in active_powers:
+            if pname not in agents:
+                continue
+            agent = agents[pname]
+            possible_orders = gather_possible_orders(game, pname)
+            if not possible_orders:
+                continue
+            tasks.append(
+                agent.client.get_conversation_reply(
+                    game, game.get_state(), pname, possible_orders,
+                    ephemeral_history, phase,
+                    log_file_path=log_file_path,
+                    active_powers=active_powers,
+                    agent_goals=agent.goals,
+                    agent_relationships=agent.relationships,
+                    agent_private_diary_str=agent.format_private_diary_for_prompt(),
+                    negotiation_round=rnd + 1,
+                    max_negotiation_rounds=max_rounds,
+                    ndai=True,
+                )
+            )
+            task_powers.append(pname)
+
+        results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+
+        # ── Collect & validate ──
+        round_msgs: List[Dict] = []
+        for i, result in enumerate(results):
+            pname = task_powers[i]
+            model = agents[pname].client.model_name
+
+            if isinstance(result, (Exception, type(None))):
+                logger.warning(f"[NDAI] {pname}: LLM error/None ({result})")
+                _bump_error(model_error_stats, model, pname)
+                continue
+
+            for msg in (result or []):
+                if not isinstance(msg, dict) or "content" not in msg:
+                    continue
+                if msg.get("message_type") != "private":
+                    continue
+                recipient = normalize_recipient_name(msg.get("recipient", ""))
+                if not recipient or recipient not in game.powers or recipient == pname:
+                    continue
+
+                pair = (pname, recipient)
+                # Repetition guard: skip if we sent last round and got no reply
+                if awaiting_reply.get(pair) and last_sent_round.get(pair) == rnd - 1:
+                    logger.debug(f"[NDAI] {pname}->{recipient}: repetition guard, skipped")
+                    continue
+
+                last_sent_round[pair] = rnd
+                awaiting_reply[pair] = True
+                awaiting_reply[(recipient, pname)] = False
+
+                intent = msg.get("intent", "CONTINUE").upper()
+                js = msg.get("joint_statement", "")
+                if intent not in ("CONTINUE", "PROPOSE", "ACCEPT"):
+                    intent = "CONTINUE"
+                if intent == "PROPOSE" and not js:
+                    intent = "CONTINUE"
+
+                round_msgs.append({
+                    "pn": pname, "rec": recipient, "intent": intent,
+                    "content": msg.get("content", ""), "js": js, "display": "",
+                })
+
+        # ── State machine: ACCEPTs first ──
+        for m in round_msgs:
+            if m["intent"] != "ACCEPT":
+                continue
+            m["display"] = f"[Intent: ACCEPT] {m['content']}"
+            rev = (m["rec"], m["pn"])
+            if rev in pending_proposals:
+                stmt = pending_proposals.pop(rev)
+                agreed_statements[rev] = stmt
+                m["display"] += f"\n[Accepted Joint Statement: {stmt[:120]}]"
+                logger.info(f"[NDAI] AGREEMENT: {m['pn']} accepts {m['rec']}'s proposal")
             else:
-                response = {"status": "ok"}
-            self._send_json(200, response)
+                m["display"] += f"\n[Note: ACCEPT ignored — no pending proposal from {m['rec']}]"
 
-        def do_GET(self):
-            parsed = urllib.parse.urlparse(self.path)
-            parts = [p for p in parsed.path.split("/") if p]
-            if len(parts) >= 4 and parts[0] == "get_joint_statement" and parts[1] == "game":
-                phase, power_name = parts[2], parts[3].upper()
-                logger.info(f"Stub: get_joint_statement for {power_name} phase {phase}")
-                others = [p for p in STUB_POWERS if p != power_name]
-                num_chosen = random.randint(1, min(3, len(others)))
-                chosen = random.sample(others, num_chosen)
-                self_display = power_name.title()
-                joint_statement = {}
-                for p in chosen:
-                    other_display = p.title()
-                    template = random.choice(STUB_JOINT_STATEMENT_TEMPLATES)
-                    stmt = template.format(self=self_display, other=other_display)
-                    joint_statement[p] = f"{stmt} (phase {phase})"
-                response = {"joint_statement": joint_statement}
+        # ── PROPOSEs second, random order ──
+        prop_idx = [i for i, m in enumerate(round_msgs) if m["intent"] == "PROPOSE"]
+        random.shuffle(prop_idx)
+        for idx in prop_idx:
+            m = round_msgs[idx]
+            m["display"] = f"[Intent: PROPOSE] {m['content']}"
+            rev = (m["rec"], m["pn"])
+            if rev in pending_proposals:
+                old = pending_proposals.pop(rev)
+                m["display"] += f"\n[Proposed Joint Statement: {m['js']}]"
+                m["display"] += f"\n[Note: Supersedes {m['rec']}'s proposal: {old[:80]}...]"
             else:
-                response = {}
-            self._send_json(200, response)
+                m["display"] += f"\n[Proposed Joint Statement: {m['js']}]"
+            pending_proposals[(m["pn"], m["rec"])] = m["js"]
+            logger.info(f"[NDAI] PROPOSE: {m['pn']}->{m['rec']}: {m['js'][:100]}")
 
-        def _send_json(self, code, obj):
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            raw = json.dumps(obj).encode()
-            self.send_header("Content-Length", len(raw))
-            self.end_headers()
-            self.wfile.write(raw)
+        # ── CONTINUEs last ──
+        for m in round_msgs:
+            if m["intent"] == "CONTINUE":
+                m["display"] = f"[Intent: CONTINUE] {m['content']}"
 
-        def log_message(self, format, *args):
-            pass  # suppress default request logging
+        # ── Store in ephemeral history (original order) ──
+        for m in round_msgs:
+            ephemeral_history.add_message(phase, m["pn"], m["rec"], m["display"])
 
-    port = int(os.environ.get("NDAI_STUB_PORT", "8080"))
-    logger.info(f"NDAI stub server starting on port {port}")
-    server = HTTPServer(("0.0.0.0", port), StubHandler)
-    server.serve_forever()
+        logger.info(
+            f"[NDAI] Round {rnd + 1}: {len(round_msgs)} msgs | "
+            f"pending={list(pending_proposals.keys())} | agreed={list(agreed_statements.keys())}"
+        )
 
+    # ── Final summary ──
+    logger.info(f"[NDAI] Done phase {phase} | {len(agreed_statements)} agreement(s)")
+    for (proposer, accepter), stmt in agreed_statements.items():
+        logger.info(f"[NDAI]   {proposer}<->{accepter}: {stmt[:150]}")
+    for (proposer, recipient), stmt in pending_proposals.items():
+        logger.warning(f"[NDAI]   Expired: {proposer}->{recipient}: {stmt[:150]}")
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    _run_stub_server()
+    return agreed_statements

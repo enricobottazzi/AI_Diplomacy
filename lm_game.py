@@ -378,7 +378,10 @@ async def main():
             if run_config.num_negotiation_rounds > 0:
                 ndai = getattr(run_config, "ndai", False)
                 if ndai:
-                    game_history = await conduct_ndai_negotiations(game, agents, game_history)
+                    game_history = await conduct_ndai_negotiations(
+                        game, agents, game_history, model_error_stats,
+                        llm_log_file_path, max_rounds=run_config.num_negotiation_rounds,
+                    )
                 else:
                     game_history = await conduct_negotiations(
                         game, agents, game_history, model_error_stats,
