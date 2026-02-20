@@ -497,7 +497,7 @@ async def main():
         # Phase Result Diary Entries
         if current_short_phase.endswith("M"):
             phase_result_diary_tasks = [
-                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase)
+                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase, ndai=getattr(run_config, "ndai", False))
                 for agent in agents.values() if not game.powers[agent.power_name].is_eliminated()
             ]
             if phase_result_diary_tasks:

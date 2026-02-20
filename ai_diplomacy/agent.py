@@ -854,7 +854,7 @@ class DiplomacyAgent:
         # Rest of the code remains the same
 
     async def generate_phase_result_diary_entry(
-        self, game: "Game", game_history: "GameHistory", phase_summary: str, all_orders: Dict[str, List[str]], log_file_path: str, phase_name: str
+        self, game: "Game", game_history: "GameHistory", phase_summary: str, all_orders: Dict[str, List[str]], log_file_path: str, phase_name: str, ndai: bool = False
     ):
         try:
             """
@@ -884,11 +884,12 @@ class DiplomacyAgent:
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
             # Get recent negotiations for this phase (use phase_name: messages were stored for the completed phase, not game.current_short_phase which has already advanced)
-            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=phase_name)
-            if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
-                messages_this_round = (
-                    "(No messages involving your power this round.)"
-                )
+            if ndai:
+                messages_this_round = game_history.get_joint_statements_this_round(power_name=self.power_name, current_phase_name=phase_name)
+            else:
+                messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=phase_name)
+                if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
+                    messages_this_round = "(No messages involving your power this round.)"
 
             # Format relationships
             relationships_str = "\n".join([f"{p}: {r}" for p, r in self.relationships.items()])
