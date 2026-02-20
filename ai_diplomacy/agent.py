@@ -488,20 +488,21 @@ class DiplomacyAgent:
             units_str, centers_str = get_board_state(board_state_dict, game)
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
-            section_label = "Joint Statements This Round" if ndai else "Messages This Round"
-            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=game.current_short_phase)
-            if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
-                messages_this_round = (
-                    "(No joint statements involving your power this round.)" if ndai
-                    else "(No messages involving your power this round.)"
+            if ndai:
+                section_label = (
+                    "JOINT STATEMENTS THIS ROUND (each statement is signed by you and another power, "
+                    "this information is only available to the signers of the statement and not to other powers)"
                 )
-            elif ndai:
-                # When NDAI is enabled, drop the "MESSAGES TO/FROM YOU THIS ROUND" subheader so the prompt goes from section_label straight to the content
-                subheader = "**MESSAGES TO/FROM YOU THIS ROUND:**\n"
-                if messages_this_round.strip().startswith(subheader.strip()):
-                    messages_this_round = messages_this_round.replace(subheader, "Each statement is signed by you and another power, this information is only available to the signers of the statement and not to other powers ", 1).lstrip()
-                # Format section headers for ndai log as "Joint statements with POWER:" instead of "Conversation with POWER:"
-                messages_this_round = messages_this_round.replace(" Conversation with ", "\n\nJoint statements with ")
+                messages_this_round = game_history.get_joint_statements_this_round(
+                    power_name=self.power_name, current_phase_name=game.current_short_phase
+                )
+            else:
+                section_label = "Messages This Round"
+                messages_this_round = game_history.get_messages_this_round(
+                    power_name=self.power_name, current_phase_name=game.current_short_phase
+                )
+                if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
+                    messages_this_round = "(No messages involving your power this round.)"
 
             current_relationships_str = json.dumps(self.relationships)
             current_goals_str = json.dumps(self.goals)
