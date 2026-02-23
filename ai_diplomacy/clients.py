@@ -483,24 +483,7 @@ class BaseModelClient:
 
         logger.debug(f"[{power_name}] Conversation context: {context}")
 
-        # KEEP ORIGINAL: Get recent messages targeting this power to prioritize responses
-        recent_messages_to_power = game_history.get_recent_messages_to_power(power_name, limit=3)
-
-        # KEEP ORIGINAL: Debug logging to verify messages
-        logger.info(f"[{power_name}] Found {len(recent_messages_to_power)} high priority messages to respond to")
-        if recent_messages_to_power:
-            for i, msg in enumerate(recent_messages_to_power):
-                logger.info(f"[{power_name}] Priority message {i + 1}: From {msg['sender']} in {msg['phase']}: {msg['content'][:50]}...")
-
-        # KEEP ORIGINAL: Add a section for unanswered messages
-        unanswered_messages = "\n\nRECENT MESSAGES REQUIRING YOUR ATTENTION:\n"
-        if recent_messages_to_power:
-            for msg in recent_messages_to_power:
-                unanswered_messages += f"\nFrom {msg['sender']} in {msg['phase']}: {msg['content']}\n"
-        else:
-            unanswered_messages += "\nNo urgent messages requiring direct responses.\n"
-
-        final_prompt = context + unanswered_messages + "\n\n" + instructions
+        final_prompt = context + "\n\n" + instructions
         final_prompt = (
             final_prompt.replace("AUSTRIA", "Austria")
             .replace("ENGLAND", "England")

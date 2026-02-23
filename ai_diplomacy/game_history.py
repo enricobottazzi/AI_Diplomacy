@@ -443,33 +443,6 @@ class GameHistory:
             messages_str += "\n"
         return messages_str.strip()
 
-    # New method to get recent messages TO a specific power
-    def get_recent_messages_to_power(self, power_name: str, limit: int = 3) -> List[Dict[str, str]]:
-        """
-        Gets the most recent messages sent TO this power, useful for tracking messages that need replies.
-        Returns a list of dictionaries with 'sender', 'content', and 'phase' keys.
-        """
-        if not self.phases:
-            return []
-
-        # Get the most recent 2 phases including current phase
-        recent_phases = self.phases[-2:] if len(self.phases) >= 2 else self.phases[-1:]
-
-        # Collect all messages sent TO this power
-        messages_to_power = []
-        for phase in recent_phases:
-            for msg in phase.messages:
-                if msg.recipient == power_name and msg.sender != power_name:
-                    messages_to_power.append({"sender": msg.sender, "content": msg.content, "phase": phase.name})
-
-        # Add debug logging
-        logger.info(f"Found {len(messages_to_power)} messages to {power_name} across {len(recent_phases)} phases")
-        if not messages_to_power:
-            logger.info(f"No messages found for {power_name} to respond to")
-
-        # Take the most recent 'limit' messages
-        return messages_to_power[-limit:] if messages_to_power else []
-
     def get_ignored_messages_by_power(self, sender_name: str, num_phases: int = 3) -> Dict[str, List[Dict[str, str]]]:
         """
         Identifies which powers are not responding to messages from sender_name.

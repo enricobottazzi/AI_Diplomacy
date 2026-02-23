@@ -11,7 +11,6 @@ Because conversations are private, you can be more candid about your intentions,
 
 TASK
 Generate one or more strategic messages to advance your interests.
-Always prioritize responding to the messages in the "RECENT MESSAGES REQUIRING YOUR ATTENTION" section.
 Maintain consistent conversation threads (unless you are choosing to ignore).
 
 If you want to formalize an agreement with another power, use PROPOSE with a joint_statement.

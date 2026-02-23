@@ -411,12 +411,10 @@ def debug_log_llm_io(
     phase: str,
     response_type: str,
     text: str,
-    max_chars: int = 16000,
 ) -> None:
     """When config.DEBUG is True, log LLM input or output at DEBUG level (console and file when --debug)."""
     if not getattr(config, "DEBUG", False):
         return
-    excerpt = text if len(text) <= max_chars else text[:max_chars] + "\n... [truncated]"
     logger.debug(
         "=== LLM DEBUG %s [model=%s power=%s phase=%s type=%s] ===\n%s\n=== END LLM %s ===",
         kind,
@@ -424,7 +422,7 @@ def debug_log_llm_io(
         power_name or "N/A",
         phase or "N/A",
         response_type or "N/A",
-        excerpt,
+        text,
         kind,
     )
 

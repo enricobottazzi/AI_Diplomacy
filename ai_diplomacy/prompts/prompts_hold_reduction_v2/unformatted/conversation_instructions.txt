@@ -5,7 +5,6 @@ You need to compose diplomatic messages to other powers in this negotiation phas
 IMPORTANT: This is about WRITING MESSAGES to other powers, not analyzing strategy or choosing orders.
 
 GUIDELINES
-- Respond to messages in "RECENT MESSAGES REQUIRING YOUR ATTENTION" section
 - Propose deals, alliances, or coordination
 - Share (or mislead about) your intentions
 - Build trust or sow discord as needed
