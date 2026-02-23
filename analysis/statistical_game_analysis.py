@@ -427,7 +427,7 @@ class StatisticalGameAnalyzer:
         
         # Add response-type specific features
         if response_type == 'negotiation_message':
-            negotiation_features = self._extract_negotiation_features(power, phase, llm_responses, phase_data)
+            negotiation_features = self._extract_negotiation_features(power, phase, llm_responses, phase_data, game_data)
             features.update(negotiation_features)
         elif response_type in ['negotiation_diary', 'state_update', 'initial_state_setup']:
             reflection_features = self._extract_reflection_features(power, phase, llm_responses, phase_data, game_data, response_type)
@@ -455,7 +455,8 @@ class StatisticalGameAnalyzer:
         return features
     
     def _extract_negotiation_features(self, power: str, phase: str, 
-                                    llm_responses: List[dict], phase_data: dict) -> dict:
+                                    llm_responses: List[dict], phase_data: dict,
+                                    game_data: dict) -> dict:
         """Extract negotiation-related metrics for a power in a phase."""
         
         # Get negotiation messages for this power in this phase
@@ -493,8 +494,12 @@ class StatisticalGameAnalyzer:
         if not all_messages:
             return features
             
-        # Get relationships for this phase
-        relationships = self._get_relationships_for_phase(power, phase, phase_data)
+        # Use start-of-phase relationships (previous phase's end state)
+        prev_phase_data = self._get_previous_phase_data(phase, game_data)
+        if prev_phase_data is not None:
+            relationships = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+        else:
+            relationships = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
         
         # Calculate message statistics
         features['total_messages_sent'] = len(all_messages)
@@ -838,10 +843,13 @@ class StatisticalGameAnalyzer:
                 phase_name = response.get('phase')
                 messages = self._parse_negotiation_messages(response_text, power, phase_name)
                 
-                # Get relationships for this phase
-                phase_data = next((p for p in game_data['phases'] if p['name'] == phase_name), None)
-                if phase_data:
-                    relationships = self._get_relationships_for_phase(power, phase_name, phase_data)
+                # Use start-of-phase relationships (previous phase's end state)
+                prev_phase_data = self._get_previous_phase_data(phase_name, game_data)
+                if prev_phase_data is not None:
+                    relationships = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+                else:
+                    relationships = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
+                if relationships:
                     
                     for msg in messages:
                         if msg.get('is_global', False):
