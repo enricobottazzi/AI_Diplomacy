@@ -437,10 +437,19 @@ class StatisticalGameAnalyzer:
         game_state_features = self._extract_game_state_features(power, phase, phase_data, game_data)
         features.update(game_state_features)
 
-        # Relationship snapshot column (e.g. "AUSTRIA:-1|FRANCE:2")
-        relationships_for_phase = self._get_relationships_for_phase(power, phase, phase_data)
-        features['relationships'] = '|'.join(
-            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_for_phase.items()
+        # Relationship snapshot columns (e.g. "AUSTRIA:-1|FRANCE:2")
+        relationships_end = self._get_relationships_for_phase(power, phase, phase_data)
+        features['relationships_end_phase'] = '|'.join(
+            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_end.items()
+        )
+
+        prev_phase_data = self._get_previous_phase_data(phase, game_data)
+        if prev_phase_data is not None:
+            relationships_start = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+        else:
+            relationships_start = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
+        features['relationships_start_phase'] = '|'.join(
+            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_start.items()
         )
         
         return features
@@ -614,7 +623,8 @@ class StatisticalGameAnalyzer:
             'territories_gained_vs_prev_phase': 0,
             'supply_centers_gained_vs_prev_phase': 0,
             'military_units_gained_vs_prev_phase': 0,
-            'relationships': ''
+            'relationships_start_phase': '',
+            'relationships_end_phase': ''
         }
         
         # Get current state
@@ -1227,7 +1237,8 @@ class StatisticalGameAnalyzer:
             'territories_gained_vs_prev_phase',
             'supply_centers_gained_vs_prev_phase',
             'military_units_gained_vs_prev_phase',
-            'relationships'
+            'relationships_start_phase',
+            'relationships_end_phase'
         ]
 
         # ensure order columns
