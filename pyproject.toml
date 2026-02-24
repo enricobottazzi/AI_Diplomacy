@@ -35,3 +35,6 @@ dependencies = [
 
 [tool.ruff]
 line-length = 150
+
+[tool.setuptools.packages.find]
+include = ["ai_diplomacy*", "diplomacy*"]
