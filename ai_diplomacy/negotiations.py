@@ -1,13 +1,16 @@
 from dotenv import load_dotenv
+import dataclasses
+import json
 import logging
 import asyncio
+import os
 from typing import Dict, TYPE_CHECKING
 
+import aiohttp
 from diplomacy.engine.message import Message
 
 from .agent import DiplomacyAgent
 from .utils import gather_possible_orders, normalize_recipient_name
-from . import ndai_server
 
 if TYPE_CHECKING:
     from .game_history import GameHistory
@@ -17,6 +20,57 @@ logger = logging.getLogger("negotiations")
 # Level inherited from root (set in lm_game.py); use --debug for DEBUG globally.
 
 load_dotenv()
+
+NDAI_SERVER_URL = "http://localhost:8000"
+
+async def _ndai_via_server(
+    game: "Game",
+    agents: Dict[str, DiplomacyAgent],
+    game_history: "GameHistory",
+    log_file_path: str,
+    max_rounds: int,
+) -> Dict[tuple, str]:
+    """Call the remote NDAI Tinfoil server and return agreed statements."""
+    from diplomacy.utils.export import to_saved_game_format
+
+    payload = {
+        "saved_game": to_saved_game_format(game),
+        "game_history": dataclasses.asdict(game_history),
+        "agent_state": {
+            power: {
+                "goals": agent.goals,
+                "relationships": agent.relationships,
+                "diary": agent.format_private_diary_for_prompt(),
+            }
+            for power, agent in agents.items()
+        },
+        "max_rounds": max_rounds,
+        "log_file_path": log_file_path,
+    }
+
+    url = NDAI_SERVER_URL.rstrip("/") + "/negotiate"
+    logger.info(f"[NDAI] Calling remote server at {url}")
+
+    def _serialize(obj):
+        """Fallback for non-JSON-serializable diplomacy types (e.g. OrderResult)."""
+        return str(obj)
+
+    raw_body = json.dumps(payload, default=_serialize).encode()
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url, data=raw_body,
+            headers={"Content-Type": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=600),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+
+    agreed: Dict[tuple, str] = {}
+    for key, text in data.get("agreed_statements", {}).items():
+        proposer, accepter = key.split("|", 1)
+        agreed[(proposer, accepter)] = text
+    return agreed
 
 
 async def conduct_ndai_negotiations(
@@ -31,8 +85,8 @@ async def conduct_ndai_negotiations(
     phase = game.current_short_phase
     logger.info("Starting NDAI negotiation phase.")
 
-    agreed_statements = await ndai_server.run_ndai_negotiations(
-        game, agents, game_history, model_error_stats, log_file_path, max_rounds
+    agreed_statements = await _ndai_via_server(
+        game, agents, game_history, log_file_path, max_rounds
     )
 
     for (proposer, accepter), text in agreed_statements.items():
