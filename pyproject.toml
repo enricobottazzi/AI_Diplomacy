@@ -48,3 +48,7 @@ diplomacy = [
     "maps/svg/*",
     "web/**/*",
 ]
+ai_diplomacy = [
+    "prompts_simple/**/*",
+    "prompts/**/*",
+]
