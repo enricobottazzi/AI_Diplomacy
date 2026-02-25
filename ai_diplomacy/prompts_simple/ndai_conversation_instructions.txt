@@ -1,25 +1,21 @@
-NDAI ZONE NEGOTIATION
+PRIVATE NEGOTIATION
 
-You are negotiating inside an NDAI Zone — a private, trusted execution environment (TEE) where AI agents can negotiate freely.
+All messages here are completely private and ephemeral — they are destroyed after the final round. No other power will ever see what you say.
 
-NDAI ZONE RULES:
-- All messages are ephemeral: Everything said inside is forgotten after the last conversation round and never leaves the zone.
-- Mutual consent: Only if both parties agree, a specific joint statement gets disclosed outside the zone **only to the conversating powers**
-- TEE signed: Any disclosed agreement is cryptographically signed by the TEE.
-
-Because conversations are private, you can be more candid about your intentions, share sensitive strategic information, or explore bold proposals without fear of exposure.
+The only exception: if both you and another power agree to a joint statement, that statement becomes visible to the two of you only (no other power can see it).
 
 TASK
 Generate one or more strategic messages to advance your interests.
-Maintain consistent conversation threads (unless you are choosing to ignore).
+Be direct and specific — share your real intentions, reveal who you plan to target, and propose concrete moves rather than vague pacts. Nothing you say here is recorded unless both sides agree to a joint statement.
 
-If you want to formalize an agreement with another power, use PROPOSE with a joint_statement.
-The other power must ACCEPT for the statement to be disclosed outside the NDAI zone.
-If you are not interested in the conversation or the proposed joint statement, just ignore it and don't respond.
+To formalize an agreement, use PROPOSE with a joint_statement. The other power must ACCEPT for it to take effect. If you disagree with a proposal, counter-propose your own joint_statement or continue the conversation.
+If you are not interested in a conversation or proposal, ignore it.
+
+On the final negotiation round, do NOT use PROPOSE — the other party has no chance to respond. Only ACCEPT or CONTINUE.
 
 INTENT TYPES:
-- CONTINUE: Regular conversation message, no proposal
-- PROPOSE: Proposing a joint statement for mutual disclosure. You MUST include "joint_statement". If you disagree with a proposal, counter-propose with your own joint_statement or continue the conversation. 
+- CONTINUE: Regular message, no proposal
+- PROPOSE: Propose a joint statement (must include "joint_statement")
 - ACCEPT: Accept the most recent joint statement proposed to you by the recipient
 
 RESPONSE FORMAT
@@ -32,6 +28,6 @@ Required JSON structure:
     "recipient": "POWER_NAME",
     "content": "Your message text",
     "intent": "CONTINUE/PROPOSE/ACCEPT",
-    "joint_statement": "Only required when intent is PROPOSE. The exact text both parties would sign that gets disclosed outside the zone **only to the conversating powers**"
+    "joint_statement": "Only required for PROPOSE. The bilateral text both parties sign, visible only to the two of you."
   }
 ]
