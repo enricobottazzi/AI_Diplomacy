@@ -697,6 +697,7 @@ class StatisticalGameAnalyzer:
                 'avg_relationship_polarization_per_phase': 0.0,
                 'avg_response_tokens_per_interaction': 0.0,
                 'avg_territories_controlled_per_phase': 0.0,
+                'avg_territory_change_per_phase': 0.0,
                 'avg_supply_centers_owned_per_phase': 0.0,
                 'avg_military_units_per_phase': 0.0,
                 'percent_messages_to_allies_overall': 0.0,
@@ -899,6 +900,10 @@ class StatisticalGameAnalyzer:
             
         if territories_per_phase:
             features['avg_territories_controlled_per_phase'] = statistics.mean(territories_per_phase)
+        if len(territories_per_phase) >= 2:
+            territory_deltas = [territories_per_phase[i] - territories_per_phase[i-1]
+                                for i in range(1, len(territories_per_phase))]
+            features['avg_territory_change_per_phase'] = statistics.mean(abs(d) for d in territory_deltas)
         if supply_centers_per_phase:
             features['avg_supply_centers_owned_per_phase'] = statistics.mean(supply_centers_per_phase)
         if military_units_per_phase:
@@ -1332,6 +1337,7 @@ class StatisticalGameAnalyzer:
             'avg_relationship_polarization_per_phase',
             'avg_response_tokens_per_interaction',
             'avg_territories_controlled_per_phase',
+            'avg_territory_change_per_phase',
             'avg_supply_centers_owned_per_phase',
             'avg_military_units_per_phase',
             'percent_messages_to_allies_overall',
