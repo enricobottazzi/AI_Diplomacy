@@ -699,7 +699,9 @@ class StatisticalGameAnalyzer:
                 'avg_territories_controlled_per_phase': 0.0,
                 'avg_territory_change_per_phase': 0.0,
                 'avg_supply_centers_owned_per_phase': 0.0,
+                'avg_supply_center_change_per_phase': 0.0,
                 'avg_military_units_per_phase': 0.0,
+                'avg_military_units_change_per_phase': 0.0,
                 'percent_messages_to_allies_overall': 0.0,
                 'percent_messages_to_enemies_overall': 0.0,
                 'percent_global_vs_private_overall': 0.0,
@@ -906,8 +908,16 @@ class StatisticalGameAnalyzer:
             features['avg_territory_change_per_phase'] = statistics.mean(abs(d) for d in territory_deltas)
         if supply_centers_per_phase:
             features['avg_supply_centers_owned_per_phase'] = statistics.mean(supply_centers_per_phase)
+        if len(supply_centers_per_phase) >= 2:
+            sc_deltas = [supply_centers_per_phase[i] - supply_centers_per_phase[i-1]
+                         for i in range(1, len(supply_centers_per_phase))]
+            features['avg_supply_center_change_per_phase'] = statistics.mean(abs(d) for d in sc_deltas)
         if military_units_per_phase:
             features['avg_military_units_per_phase'] = statistics.mean(military_units_per_phase)
+        if len(military_units_per_phase) >= 2:
+            mu_deltas = [military_units_per_phase[i] - military_units_per_phase[i-1]
+                         for i in range(1, len(military_units_per_phase))]
+            features['avg_military_units_change_per_phase'] = statistics.mean(abs(d) for d in mu_deltas)
             
         if sentiment_toward_values:
             features['avg_sentiment_toward_others'] = statistics.mean(sentiment_toward_values)
@@ -1339,7 +1349,9 @@ class StatisticalGameAnalyzer:
             'avg_territories_controlled_per_phase',
             'avg_territory_change_per_phase',
             'avg_supply_centers_owned_per_phase',
+            'avg_supply_center_change_per_phase',
             'avg_military_units_per_phase',
+            'avg_military_units_change_per_phase',
             'percent_messages_to_allies_overall',
             'percent_messages_to_enemies_overall',
             'percent_global_vs_private_overall',
