@@ -350,6 +350,26 @@ class StatisticalGameAnalyzer:
 
         return self_count, other_count
 
+    def _get_cross_support_targets(self, power: str, phase_data: dict) -> set:
+        """Return the set of powers that received a support order from *power* in this phase."""
+        units = phase_data.get('state', {}).get('units', {})
+        loc_to_owner: dict[str, str] = {}
+        for owner, unit_list in units.items():
+            for u in unit_list:
+                loc_to_owner[self._unit_location_key(u)] = owner
+
+        targets = set()
+        for otype, order_list in phase_data.get('order_results', {}).get(power, {}).items():
+            if otype.lower() != 'support':
+                continue
+            for entry in order_list:
+                m = self._SUPPORT_RE.match(entry.get('order', ''))
+                if m:
+                    owner = loc_to_owner.get(self._unit_location_key(m.group(1)))
+                    if owner and owner != power:
+                        targets.add(owner)
+        return targets
+
     # ────────────────── GAME-LEVEL ORDER TOTALS ──────────────────
     def _aggregate_order_results(self, power: str, game_data: dict) -> dict:
         """
@@ -897,6 +917,15 @@ class StatisticalGameAnalyzer:
             
             # === CALCULATE AVERAGED BEHAVIORAL METRICS ===
             self._calculate_averaged_game_metrics(features, power, llm_responses, game_data)
+
+            # === COORDINATION SCORE (reciprocal cross-power support) ===
+            coordination = 0
+            for phase in game_data.get('phases', []):
+                my_targets = self._get_cross_support_targets(power, phase)
+                for other in my_targets:
+                    if power in self._get_cross_support_targets(other, phase):
+                        coordination += 1
+            features['coordination_score'] = coordination
 
             # === ASSIGN POWER CONCENTRATION (same for every power in this game) ===
             features.update(concentration)
@@ -1519,6 +1548,9 @@ class StatisticalGameAnalyzer:
 
             # === Diplobench style single scalar game score ===
             'game_score',
+
+            # === COORDINATION ===
+            'coordination_score',
         ]
 
         # ensure order-total columns
