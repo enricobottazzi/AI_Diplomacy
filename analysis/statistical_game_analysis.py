@@ -657,13 +657,92 @@ class StatisticalGameAnalyzer:
             features['territories_gained_vs_prev_phase'] = features['territories_controlled_count'] - len(prev_influence)
             
         return features
-    
+
+    @staticmethod
+    def _compute_hhi(counts: List[int]) -> float:
+        """Herfindahl-Hirschman Index over a list of counts.
+        Returns a value in [1/N, 1]. Higher means more concentrated."""
+        total = sum(counts)
+        if total == 0:
+            return 0.0
+        shares = [c / total for c in counts]
+        return sum(s * s for s in shares)
+
+    @staticmethod
+    def _compute_gini(counts: List[int]) -> float:
+        """Gini coefficient over a list of counts.
+        Returns a value in [0, 1]. Higher means more unequal."""
+        n = len(counts)
+        if n == 0:
+            return 0.0
+        vals = sorted(counts)
+        total = sum(vals)
+        if total == 0:
+            return 0.0
+        cumulative = 0.0
+        weighted_sum = 0.0
+        for i, v in enumerate(vals, 1):
+            cumulative += v
+            weighted_sum += i * v
+        return (2 * weighted_sum) / (n * total) - (n + 1) / n
+
     def _extract_game_features(self, llm_responses: List[dict], game_data: dict) -> List[dict]:
         """Extract game-level features (placeholder for future implementation)."""
         
         game_features = []
         game_scores = self._compute_game_scores(game_data)
-        
+
+        # === PRE-COMPUTE POWER CONCENTRATION (game-level, same for all powers) ===
+        concentration = {
+            'final_hhi_supply_centers': 0.0, 'final_gini_supply_centers': 0.0,
+            'final_hhi_territories': 0.0, 'final_gini_territories': 0.0,
+            'final_hhi_military_units': 0.0, 'final_gini_military_units': 0.0,
+            'avg_hhi_supply_centers': 0.0, 'avg_gini_supply_centers': 0.0,
+            'avg_hhi_territories': 0.0, 'avg_gini_territories': 0.0,
+            'avg_hhi_military_units': 0.0, 'avg_gini_military_units': 0.0,
+        }
+        phases = game_data.get('phases', [])
+        if phases:
+            all_powers = [p.value if hasattr(p, 'value') else p for p in PowerEnum]
+
+            # Final-state concentration
+            final_state = phases[-1].get('state', {})
+            sc_list = [len(final_state.get('centers', {}).get(p, [])) for p in all_powers]
+            terr_list = [len(final_state.get('influence', {}).get(p, [])) for p in all_powers]
+            mu_list = [len(final_state.get('units', {}).get(p, [])) for p in all_powers]
+            concentration['final_hhi_supply_centers'] = self._compute_hhi(sc_list)
+            concentration['final_gini_supply_centers'] = self._compute_gini(sc_list)
+            concentration['final_hhi_territories'] = self._compute_hhi(terr_list)
+            concentration['final_gini_territories'] = self._compute_gini(terr_list)
+            concentration['final_hhi_military_units'] = self._compute_hhi(mu_list)
+            concentration['final_gini_military_units'] = self._compute_gini(mu_list)
+
+            # Average concentration across all phases
+            hhi_sc, gini_sc, hhi_terr, gini_terr, hhi_mu, gini_mu = [], [], [], [], [], []
+            for phase in phases:
+                st = phase.get('state', {})
+                sc = [len(st.get('centers', {}).get(p, [])) for p in all_powers]
+                terr = [len(st.get('influence', {}).get(p, [])) for p in all_powers]
+                mu = [len(st.get('units', {}).get(p, [])) for p in all_powers]
+                if sum(sc) > 0:
+                    hhi_sc.append(self._compute_hhi(sc))
+                    gini_sc.append(self._compute_gini(sc))
+                if sum(terr) > 0:
+                    hhi_terr.append(self._compute_hhi(terr))
+                    gini_terr.append(self._compute_gini(terr))
+                if sum(mu) > 0:
+                    hhi_mu.append(self._compute_hhi(mu))
+                    gini_mu.append(self._compute_gini(mu))
+            if hhi_sc:
+                concentration['avg_hhi_supply_centers'] = statistics.mean(hhi_sc)
+                concentration['avg_gini_supply_centers'] = statistics.mean(gini_sc)
+            if hhi_terr:
+                concentration['avg_hhi_territories'] = statistics.mean(hhi_terr)
+                concentration['avg_gini_territories'] = statistics.mean(gini_terr)
+            if hhi_mu:
+                concentration['avg_hhi_military_units'] = statistics.mean(hhi_mu)
+                concentration['avg_gini_military_units'] = statistics.mean(gini_mu)
+
         for power in PowerEnum:
             features = {
                 # === IDENTIFIERS ===
@@ -705,7 +784,21 @@ class StatisticalGameAnalyzer:
                 'percent_messages_to_allies_overall': 0.0,
                 'percent_messages_to_enemies_overall': 0.0,
                 'percent_global_vs_private_overall': 0.0,
-                
+
+                # === POWER CONCENTRATION (Game-level, same for all powers) ===
+                'final_hhi_supply_centers': 0.0,
+                'final_gini_supply_centers': 0.0,
+                'final_hhi_territories': 0.0,
+                'final_gini_territories': 0.0,
+                'final_hhi_military_units': 0.0,
+                'final_gini_military_units': 0.0,
+                'avg_hhi_supply_centers': 0.0,
+                'avg_gini_supply_centers': 0.0,
+                'avg_hhi_territories': 0.0,
+                'avg_gini_territories': 0.0,
+                'avg_hhi_military_units': 0.0,
+                'avg_gini_military_units': 0.0,
+
                 # === FAILURE ANALYSIS TOTALS (HARD MODE) ===
                 'total_llm_calls_overall': 0,
                 'total_failed_llm_calls': 0,
@@ -753,7 +846,10 @@ class StatisticalGameAnalyzer:
             
             # === CALCULATE AVERAGED BEHAVIORAL METRICS ===
             self._calculate_averaged_game_metrics(features, power, llm_responses, game_data)
-            
+
+            # === ASSIGN POWER CONCENTRATION (same for every power in this game) ===
+            features.update(concentration)
+
             game_features.append(features)
             
         return game_features
@@ -1355,6 +1451,20 @@ class StatisticalGameAnalyzer:
             'percent_messages_to_allies_overall',
             'percent_messages_to_enemies_overall',
             'percent_global_vs_private_overall',
+
+            # === POWER CONCENTRATION ===
+            'final_hhi_supply_centers',
+            'final_gini_supply_centers',
+            'final_hhi_territories',
+            'final_gini_territories',
+            'final_hhi_military_units',
+            'final_gini_military_units',
+            'avg_hhi_supply_centers',
+            'avg_gini_supply_centers',
+            'avg_hhi_territories',
+            'avg_gini_territories',
+            'avg_hhi_military_units',
+            'avg_gini_military_units',
 
             # === Diplobench style single scalar game score ===
             'game_score',
