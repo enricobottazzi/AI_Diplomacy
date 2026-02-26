@@ -272,10 +272,12 @@ class StatisticalGameAnalyzer:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             for metric in ("total", "success", "bounce", "void", "invalid"):
                 features[f"orders_{plural}_{metric}"] = 0
-            features[f"orders_{plural}_success_rate"] = 0.0      # ← new
+            features[f"orders_{plural}_success_rate"] = 0.0
 
         orders_by_type = phase_data.get("order_results", {}).get(power, {})
         if not orders_by_type:
+            features["orders_supports_self_total"] = 0
+            features["orders_supports_others_total"] = 0
             return features
 
         for otype, order_list in orders_by_type.items():
@@ -305,9 +307,48 @@ class StatisticalGameAnalyzer:
             tot  = features[f"orders_{plural}_total"]
             features[f"orders_{plural}_success_rate"] = succ / tot if tot else 0.0
 
+        # ── cross-power support breakdown ──
+        self_sup, other_sup = self._classify_support_orders(power, phase_data)
+        features["orders_supports_self_total"] = self_sup
+        features["orders_supports_others_total"] = other_sup
+
         return features
 
+    # ────────────────── CROSS-POWER SUPPORT HELPERS ──────────────
+    _SUPPORT_RE = re.compile(r'[AF]\s+\S+\s+S\s+([AF]\s+\S+)')
 
+    @staticmethod
+    def _unit_location_key(unit_str: str) -> str:
+        """Strip coastal suffixes so 'F STP/SC' matches 'F STP'."""
+        return unit_str.split('/')[0]
+
+    def _classify_support_orders(self, power: str, phase_data: dict) -> Tuple[int, int]:
+        """Return (self_support_count, cross_power_support_count) for *power* in one phase."""
+        units = phase_data.get('state', {}).get('units', {})
+        loc_to_owner: dict[str, str] = {}
+        for owner, unit_list in units.items():
+            for u in unit_list:
+                loc_to_owner[self._unit_location_key(u)] = owner
+
+        self_count = 0
+        other_count = 0
+
+        orders_by_type = phase_data.get('order_results', {}).get(power, {})
+        for otype, order_list in orders_by_type.items():
+            if otype.lower() != 'support':
+                continue
+            for entry in order_list:
+                m = self._SUPPORT_RE.match(entry.get('order', ''))
+                if not m:
+                    continue
+                supported_unit = self._unit_location_key(m.group(1))
+                owner = loc_to_owner.get(supported_unit)
+                if owner == power:
+                    self_count += 1
+                elif owner is not None:
+                    other_count += 1
+
+        return self_count, other_count
 
     # ────────────────── GAME-LEVEL ORDER TOTALS ──────────────────
     def _aggregate_order_results(self, power: str, game_data: dict) -> dict:
@@ -320,7 +361,10 @@ class StatisticalGameAnalyzer:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             for metric in ("total", "success", "bounce", "void", "invalid"):
                 totals[f"orders_{plural}_{metric}"] = 0
-            totals[f"orders_{plural}_success_rate"] = 0.0          # ← new
+            totals[f"orders_{plural}_success_rate"] = 0.0
+
+        total_self_sup = 0
+        total_other_sup = 0
 
         for phase in game_data.get("phases", []):
             orders_by_type = phase.get("order_results", {}).get(power, {})
@@ -347,12 +391,19 @@ class StatisticalGameAnalyzer:
                         case _ if result in ("void", "void: no effect", ""):
                             totals[f"{key_base}_void"] += 1
 
+            self_sup, other_sup = self._classify_support_orders(power, phase)
+            total_self_sup += self_sup
+            total_other_sup += other_sup
+
         # ── derive success rates ──
         for ot in self.ORDER_TYPES:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             succ = totals[f"orders_{plural}_success"]
             tot  = totals[f"orders_{plural}_total"]
             totals[f"orders_{plural}_success_rate"] = succ / tot if tot else 0.0
+
+        totals["orders_supports_self_total"] = total_self_sup
+        totals["orders_supports_others_total"] = total_other_sup
 
         return totals
 
@@ -1377,8 +1428,8 @@ class StatisticalGameAnalyzer:
                 col = f"orders_{plural}_{suffix}"
                 if col not in fieldnames:
                     fieldnames.append(col)
+        fieldnames.extend(["orders_supports_self_total", "orders_supports_others_total"])
 
-        
         # Ensure all actual fields are included (in case we missed any)
         actual_fields = set()
         for row in phase_features:
@@ -1473,14 +1524,12 @@ class StatisticalGameAnalyzer:
         # ensure order-total columns
         for ot in self.ORDER_TYPES:
             plural = f"{ot}s" if not ot.endswith("s") else ot
-            base = f"orders_{plural}_total"
             for suffix in ("total", "success", "bounce", "void", "invalid", "success_rate"):
                 col = f"orders_{plural}_{suffix}"
                 if col not in fieldnames:
                     fieldnames.append(col)
+        fieldnames.extend(["orders_supports_self_total", "orders_supports_others_total"])
 
-
-        
         # Ensure all actual fields are included
         actual_fields = set()
         for row in game_features:
