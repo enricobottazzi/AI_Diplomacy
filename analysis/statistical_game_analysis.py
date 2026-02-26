@@ -694,6 +694,7 @@ class StatisticalGameAnalyzer:
                 'avg_relationship_stability_per_phase': 0.0,
                 'avg_sentiment_toward_others': 0.0,
                 'avg_sentiment_from_others': 0.0,
+                'avg_relationship_polarization_per_phase': 0.0,
                 'avg_response_tokens_per_interaction': 0.0,
                 'avg_territories_controlled_per_phase': 0.0,
                 'avg_supply_centers_owned_per_phase': 0.0,
@@ -766,6 +767,7 @@ class StatisticalGameAnalyzer:
         supply_centers_per_phase = []
         military_units_per_phase = []
         relationship_stability_values = []
+        relationship_polarization_values = []
         
         # Track previous relationships for stability calculation
         prev_relationships = None
@@ -785,6 +787,10 @@ class StatisticalGameAnalyzer:
             supply_centers_per_phase.append(supply_centers)
             military_units_per_phase.append(military_units)
             
+            # Only collect relationship metrics for movement phases (non-movement phases carry unchanged values)
+            if not phase_name.endswith('M'):
+                continue
+
             # Get relationship data for sentiment calculations
             if 'state_agents' in phase:
                 sa = phase['state_agents']
@@ -799,6 +805,8 @@ class StatisticalGameAnalyzer:
                     outgoing_values = [self.relationship_values.get(rel, 0) for rel in power_relationships.values()]
                     if outgoing_values:
                         sentiment_toward_values.append(statistics.mean(outgoing_values))
+                    if len(outgoing_values) > 1:
+                        relationship_polarization_values.append(statistics.stdev(outgoing_values))
                 
                 # Calculate sentiment from others
                 incoming_values = []
@@ -903,6 +911,8 @@ class StatisticalGameAnalyzer:
         
         if relationship_stability_values:
             features['avg_relationship_stability_per_phase'] = statistics.mean(relationship_stability_values)
+        if relationship_polarization_values:
+            features['avg_relationship_polarization_per_phase'] = statistics.mean(relationship_polarization_values)
         
         if total_responses > 0:
             features['avg_response_tokens_per_interaction'] = total_tokens / total_responses
@@ -1319,6 +1329,7 @@ class StatisticalGameAnalyzer:
             'avg_relationship_stability_per_phase', 
             'avg_sentiment_toward_others',
             'avg_sentiment_from_others',
+            'avg_relationship_polarization_per_phase',
             'avg_response_tokens_per_interaction',
             'avg_territories_controlled_per_phase',
             'avg_supply_centers_owned_per_phase',
