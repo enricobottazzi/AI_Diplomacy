@@ -94,8 +94,7 @@ async def run_ndai_negotiations(
             for msg in (result or []):
                 if not isinstance(msg, dict) or "content" not in msg:
                     continue
-                if msg.get("message_type") != "private":
-                    continue
+                msg["message_type"] = "private"
                 recipient = normalize_recipient_name(msg.get("recipient", ""))
                 if not recipient or recipient not in game.powers or recipient == pname:
                     continue

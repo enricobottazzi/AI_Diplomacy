@@ -183,10 +183,7 @@ async def conduct_negotiations(
                     logger.warning(f"Invalid message format received from {power_name}: {message}. Skipping.")
                     continue
 
-                # NEW: Only accept targeted (private) messages;
-                if message.get("message_type") != "private":
-                    logger.debug(f"Skipping non-private message from {power_name} (targeted only).")
-                    continue
+                message["message_type"] = "private"
                 recipient = normalize_recipient_name(message.get("recipient", ""))
                 if not recipient or recipient not in game.powers:
                     logger.warning(f"Invalid or missing recipient in message from {power_name}. Skipping.")

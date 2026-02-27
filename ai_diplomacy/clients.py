@@ -680,9 +680,7 @@ class BaseModelClient:
                     if not isinstance(msg, dict) or "content" not in msg:
                         logger.warning(f"[{self.model_name}] Invalid message structure for {power_name}")
                         continue
-                    if msg.get("message_type") != "private":
-                        logger.debug(f"[{self.model_name}] Skipping non-private message from {power_name} (targeted only).")
-                        continue
+                    msg["message_type"] = "private"
                     if "recipient" not in msg or not msg.get("recipient"):
                         logger.warning(f"[{self.model_name}] Private message missing recipient for {power_name}")
                         continue

@@ -25,7 +25,6 @@ Return ONLY a single JSON array containing one or more message objects, remember
 
 [
   {
-    "message_type": "private",
     "recipient": "POWER_NAME",
     "content": "Your message text",
     "intent": "CONTINUE/PROPOSE/ACCEPT",
