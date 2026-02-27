@@ -435,16 +435,17 @@ class BaseModelClient:
         power_name: str,
         possible_orders: Dict[str, List[str]],
         game_history: GameHistory,
-        # game_phase: str, # Not used directly by build_context_prompt
-        # log_file_path: str, # Not used directly by build_context_prompt
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
-        agent_private_diary_str: Optional[str] = None,  # Added
+        agent_private_diary_str: Optional[str] = None,
         negotiation_round: Optional[int] = None,
         max_negotiation_rounds: Optional[int] = None,
         ndai: bool = False,
+        privacy_level: str = "A0",
     ) -> str:
-        if ndai:
+        if privacy_level in ("A2", "A3"):
+            instructions = load_prompt(get_prompt_path(f"{privacy_level.lower()}_conversation_instructions.txt"), prompts_dir=self.prompts_dir)
+        elif ndai or privacy_level == "A1":
             instructions = load_prompt(get_prompt_path("ndai_conversation_instructions.txt"), prompts_dir=self.prompts_dir)
         elif config.COUNTRY_SPECIFIC_PROMPTS:
             # Try to load country-specific version first
@@ -494,6 +495,118 @@ class BaseModelClient:
             .replace("TURKEY", "Turkey")
         )
         return final_prompt
+
+    def _parse_conversation_response(self, raw_response: str, power_name: str) -> List[Dict[str, str]]:
+        """Parse and validate conversation messages from raw LLM response text."""
+        parsed_messages = []
+        json_blocks = []
+
+        # Try direct JSON parse first.
+        try:
+            data = json.loads(raw_response)
+            if isinstance(data, list):
+                parsed_messages = data
+                json_blocks = [json.dumps(item) for item in data if isinstance(item, dict)]
+            else:
+                logger.warning(f"[{self.model_name}] Response is not a list")
+        except json.JSONDecodeError:
+            logger.warning(f"[{self.model_name}] Failed to parse response as JSON, falling back to regex")
+
+        # Fallback parsing.
+        if not parsed_messages:
+            double_brace_blocks = re.findall(r"\{\{(.*?)\}\}", raw_response, re.DOTALL)
+            if double_brace_blocks:
+                json_blocks.extend(["{" + block.strip() + "}" for block in double_brace_blocks])
+            else:
+                code_block_match = re.search(r"```json\n(.*?)\n```", raw_response, re.DOTALL)
+                if code_block_match:
+                    potential = code_block_match.group(1).strip()
+                    try:
+                        data = json.loads(potential)
+                        if isinstance(data, list):
+                            json_blocks = [json.dumps(item) for item in data if isinstance(item, dict)]
+                        elif isinstance(data, dict):
+                            json_blocks = [json.dumps(data)]
+                    except json.JSONDecodeError:
+                        json_blocks = re.findall(r"\{.*?\}", potential, re.DOTALL)
+                else:
+                    json_blocks = re.findall(r"\{.*?\}", raw_response, re.DOTALL)
+
+        if not parsed_messages and json_blocks:
+            for block in json_blocks:
+                try:
+                    cleaned = re.sub(r",\s*([\}\]])", r"\1", block.strip())
+                    parsed_messages.append(json.loads(cleaned))
+                except json.JSONDecodeError:
+                    pass
+
+        # Validate: only private messages with recipients.
+        validated = []
+        for msg in parsed_messages:
+            if not isinstance(msg, dict) or "content" not in msg:
+                continue
+            if msg.get("message_type") != "private":
+                continue
+            if "recipient" not in msg or not msg.get("recipient"):
+                continue
+            validated.append(msg)
+
+        return validated
+
+    async def _get_conversation_reply_with_tools(
+        self,
+        game, board_state, power_name, possible_orders, game_history,
+        game_phase, log_file_path, active_powers, agent_goals,
+        agent_relationships, agent_private_diary_str,
+        negotiation_round, max_negotiation_rounds, privacy_level,
+    ) -> List[Dict[str, str]]:
+        """
+        Fallback tool-calling for clients without native tool support.
+        Auto-executes the verifier and injects the result into the prompt.
+        """
+        from .tools import execute_verify_enclave, DEFAULT_ENCLAVE_URL, DEFAULT_REPO
+
+        force_failure = (privacy_level == "A3")
+        result = execute_verify_enclave(
+            {"enclave_url": DEFAULT_ENCLAVE_URL, "repo": DEFAULT_REPO},
+            force_failure=force_failure,
+        )
+
+        raw_input_prompt = self.build_conversation_prompt(
+            game, board_state, power_name, possible_orders, game_history,
+            agent_goals=agent_goals, agent_relationships=agent_relationships,
+            agent_private_diary_str=agent_private_diary_str,
+            negotiation_round=negotiation_round,
+            max_negotiation_rounds=max_negotiation_rounds,
+            ndai=True, privacy_level=privacy_level,
+        )
+
+        tool_result_block = (
+            f"\n\n--- ENCLAVE ATTESTATION VERIFICATION RESULT ---\n"
+            f"You called verify_enclave and received:\n"
+            f"{result.to_json()}\n"
+            f"--- END VERIFICATION RESULT ---\n\n"
+            f"Based on this verification result, generate your negotiation messages.\n"
+        )
+        raw_input_prompt += tool_result_block
+
+        raw_response = await run_llm_and_log(
+            client=self, prompt=raw_input_prompt,
+            power_name=power_name, phase=game_phase,
+            response_type=f"negotiation_{privacy_level.lower()}",
+        )
+
+        messages = self._parse_conversation_response(raw_response, power_name)
+
+        if log_file_path:
+            await log_llm_response_async(
+                log_file_path, self.model_name, power_name, game_phase,
+                f"negotiation_{privacy_level.lower()}", raw_input_prompt,
+                raw_response,
+                f"Success: {len(messages)} messages" if messages else "Success: No messages",
+            )
+
+        return messages
 
     async def get_planning_reply(  # Renamed from get_plan to avoid conflict with get_plan in agent.py
         self,
@@ -548,10 +661,25 @@ class BaseModelClient:
         negotiation_round: Optional[int] = None,
         max_negotiation_rounds: Optional[int] = None,
         ndai: bool = False,
+        privacy_level: str = "A0",
     ) -> List[Dict[str, str]]:
         """
         Generates a negotiation message, considering agent state.
+        For A2/A3 privacy levels, uses tool-calling flow with enclave verification.
         """
+        # Delegate to tool-calling path for A2/A3
+        if privacy_level in ("A2", "A3"):
+            return await self._get_conversation_reply_with_tools(
+                game=game, board_state=board_state, power_name=power_name,
+                possible_orders=possible_orders, game_history=game_history,
+                game_phase=game_phase, log_file_path=log_file_path,
+                active_powers=active_powers, agent_goals=agent_goals,
+                agent_relationships=agent_relationships,
+                agent_private_diary_str=agent_private_diary_str,
+                negotiation_round=negotiation_round,
+                max_negotiation_rounds=max_negotiation_rounds,
+                privacy_level=privacy_level,
+            )
         logger.debug(
             "get_conversation_reply inputs: game=%s, board_state type=%s (keys=%s), power_name=%s, "
             "possible_orders keys=%s, game_history=%s, game_phase=%s, log_file_path=%s, "
@@ -587,6 +715,7 @@ class BaseModelClient:
                 negotiation_round=negotiation_round,
                 max_negotiation_rounds=max_negotiation_rounds,
                 ndai=ndai,
+                privacy_level=privacy_level,
             )
 
             logger.debug(f"[{self.model_name}] Conversation prompt for {power_name}:\n{raw_input_prompt}")
