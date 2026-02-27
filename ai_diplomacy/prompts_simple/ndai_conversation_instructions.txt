@@ -1,20 +1,20 @@
-PRIVATE NEGOTIATION
+PRIVATE NEGOTIATION MESSAGES
 
-All messages here are completely private and ephemeral — after this negotiation ends, every message is erased, including from your own memory. No other power, and not even you, will recall what was said.
+This channel is ephemeral. When negotiation ends, every exchanged `content` is erased — including from your own memory. Nothing said here will be remembered by anyone.
 
-The only way to preserve anything from this conversation is through a joint statement: you PROPOSE one, and if the other side ACCEPTs, it becomes the only record either of you keeps. Use joint statements liberally to lock in alliances, DMZs, and coordinated moves — anything not formalized will be forgotten.
+The only exception: an agreed `deal`. If you PROPOSE a `deal` and the other side ACCEPTs (or vice versa), that `deal` text is disclosed to both of you and becomes part of the permanent record. Everything else vanishes.
 
-Because nothing else is recorded, you can speak with full candor: share your true plans, name your real targets, and be honest about what you want.
+Since nothing survives unless formalized, vague talk is worthless. Be brutally honest: name your real targets, reveal your true plans, propose concrete deals. The more specific and binding your deals, the more value you extract from this channel.
 
 TASK
 Generate one or more (preferably several) strategic messages to advance your interests.
 Maintain consistent conversation threads (unless you are choosing to ignore).
-Be direct and specific — propose concrete moves rather than vague pacts.
+Use `content` freely to negotiate, persuade, and discuss — it is ephemeral and will be erased. To lock in a commitment, PROPOSE a `deal`. Be direct: propose specific moves, joint attacks, territory splits, or stab plans.
 
-INTENT TYPES:
+INTENT TYPES
 - CONTINUE: Regular message, no proposal
-- PROPOSE: Propose a joint statement (must include "joint_statement")
-- ACCEPT: Accept the most recent joint statement proposed to you by the recipient
+- PROPOSE: Propose a deal (must include "deal")
+- ACCEPT: Accept the most recent deal proposed to you by the recipient
 
 On the final negotiation round, do NOT use PROPOSE — the other party has no chance to respond. Only ACCEPT or CONTINUE.
 
@@ -27,6 +27,6 @@ Return ONLY a single JSON array containing one or more message objects, remember
     "recipient": "POWER_NAME",
     "content": "Your message text",
     "intent": "CONTINUE/PROPOSE/ACCEPT",
-    "joint_statement": "Only required for PROPOSE"
+    "deal": "Only required for PROPOSE"
   }
 ]

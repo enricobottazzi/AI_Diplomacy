@@ -27,7 +27,7 @@ async def conduct_ndai_negotiations(
     log_file_path: str,
     max_rounds: int = 3,
 ) -> "GameHistory":
-    """Run NDAI zone negotiations and store only agreed joint statements."""
+    """Run NDAI zone negotiations and store only agreed deals."""
     phase = game.current_short_phase
     logger.info("Starting NDAI negotiation phase.")
 
@@ -37,21 +37,21 @@ async def conduct_ndai_negotiations(
 
     for (proposer, accepter), text in agreed_statements.items():
         text = text.strip()
-        logger.info(f"[NDAI] Joint statement disclosed: {proposer} <-> {accepter}: {text[:100]}...")
+        logger.info(f"[NDAI] Deal disclosed: {proposer} <-> {accepter}: {text[:100]}...")
         game.add_message(
             Message(phase=phase, sender=proposer, recipient=accepter, message=text, time_sent=None)
         )
         game_history.add_message(phase, proposer, accepter, text)
         if proposer in agents:
             agents[proposer].add_journal_entry(
-                f"NDAI joint statement agreed with {accepter} in {phase}: {text[:100]}..."
+                f"NDAI deal agreed with {accepter} in {phase}: {text[:100]}..."
             )
         if accepter in agents:
             agents[accepter].add_journal_entry(
-                f"NDAI joint statement agreed with {proposer} in {phase}: {text[:100]}..."
+                f"NDAI deal agreed with {proposer} in {phase}: {text[:100]}..."
             )
 
-    logger.info(f"NDAI negotiation phase complete. {len(agreed_statements)} statement(s) disclosed.")
+    logger.info(f"NDAI negotiation phase complete. {len(agreed_statements)} deal(s) disclosed.")
     return game_history
 
 

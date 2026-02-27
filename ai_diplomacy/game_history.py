@@ -384,10 +384,10 @@ class GameHistory:
 
 
 
-    def get_joint_statements_this_round(self, power_name: str, current_phase_name: str) -> str:
-        """Format joint statements for NDAI mode.
+    def get_deals_this_round(self, power_name: str, current_phase_name: str) -> str:
+        """Format deals for NDAI mode.
 
-        In NDAI mode, messages stored in the phase are joint statements
+        In NDAI mode, messages stored in the phase are deals
         agreed upon by both parties. This groups them by the other power
         and presents them in a clear, contract-style format.
         """
@@ -398,7 +398,7 @@ class GameHistory:
                 break
 
         if not current_phase:
-            return "(No joint statements involving your power this round.)"
+            return "(No deals involving your power this round.)"
 
         statements_by_power: Dict[str, List[str]] = {}
         for msg in current_phase.messages:
@@ -411,11 +411,11 @@ class GameHistory:
             statements_by_power.setdefault(other, []).append(msg.content)
 
         if not statements_by_power:
-            return "(No joint statements involving your power this round.)"
+            return "(No deals involving your power this round.)"
 
         lines: list[str] = []
         for other_power, contents in statements_by_power.items():
-            lines.append(f"Joint statements signed by you and {other_power}:")
+            lines.append(f"Deals signed by you and {other_power}:")
             for content in contents:
                 lines.append(f"   {content}")
             lines.append("")  # blank line between groups

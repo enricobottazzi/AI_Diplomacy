@@ -5,7 +5,7 @@
 | Intent | Description |
 |--------|-------------|
 | **CONTINUE** | Regular message, no proposal action |
-| **PROPOSE** | Propose a joint statement (must include `joint_statement`). Counter-proposing supersedes any reverse pending proposal |
+| **PROPOSE** | Propose a deal (must include `deal`). Counter-proposing supersedes any reverse pending proposal |
 | **ACCEPT** | Accept the most recent proposal from the recipient |
 
 ## Processing Order Within a Round
