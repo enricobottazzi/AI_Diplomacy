@@ -26,13 +26,15 @@ async def conduct_ndai_negotiations(
     model_error_stats: Dict[str, Dict[str, int]],
     log_file_path: str,
     max_rounds: int = 3,
+    privacy_level: str = "A1",
 ) -> "GameHistory":
     """Run NDAI zone negotiations and store only agreed joint statements."""
     phase = game.current_short_phase
-    logger.info("Starting NDAI negotiation phase.")
+    logger.info("Starting NDAI negotiation phase (privacy_level=%s).", privacy_level)
 
     agreed_statements = await ndai_server.run_ndai_negotiations(
-        game, agents, game_history, model_error_stats, log_file_path, max_rounds
+        game, agents, game_history, model_error_stats, log_file_path, max_rounds,
+        privacy_level=privacy_level,
     )
 
     for (proposer, accepter), text in agreed_statements.items():

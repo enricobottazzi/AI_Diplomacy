@@ -172,12 +172,14 @@ def _add_lm_game_flags(p: argparse.ArgumentParser) -> None:
         help="Enable the planning phase for each power to set strategic directives.",
     )
     p.add_argument(
-        "--ndai",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=False,
-        help="When true, use NDAI negotiation logic.",
+        "--privacy_level",
+        type=str,
+        choices=["A0", "A1", "A2", "A3"],
+        default="A0",
+        help=(
+            "Privacy assurance level: A0=zero privacy, A1=claimed privacy (NDAI), "
+            "A2=attested privacy (tool-verified), A3=invalid attestation."
+        ),
     )
     p.add_argument(
         "--max_tokens",

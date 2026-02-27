@@ -35,6 +35,7 @@ async def run_ndai_negotiations(
     model_error_stats: Dict[str, Dict[str, int]],
     log_file_path: str,
     max_rounds: int = 3,
+    privacy_level: str = "A1",
 ) -> Dict[Tuple[str, str], str]:
     """
     Run NDAI zone negotiations.  Returns agreed (proposer, accepter) -> text.
@@ -74,6 +75,7 @@ async def run_ndai_negotiations(
                     negotiation_round=rnd + 1,
                     max_negotiation_rounds=max_rounds,
                     ndai=True,
+                    privacy_level=privacy_level,
                 )
             )
             task_powers.append(pname)

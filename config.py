@@ -12,6 +12,7 @@ class Configuration(BaseSettings):
     USE_UNFORMATTED_PROMPTS: bool = False
     SIMPLE_PROMPTS: bool = True
     COUNTRY_SPECIFIC_PROMPTS: bool = False
+    PRIVACY_LEVEL: str = "A0"  # A0, A1, A2, A3
 
     # Default models for tasks
     AI_DIPLOMACY_NARRATIVE_MODEL: str = "openrouter-google/gemini-2.5-flash-preview-05-20"

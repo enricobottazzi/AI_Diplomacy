@@ -189,12 +189,15 @@ def parse_arguments():
         ),
     )
     parser.add_argument(
-        "--ndai",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=False,
-        help="When true, use NDAI negotiation logic.",
+        "--privacy_level",
+        type=str,
+        choices=["A0", "A1", "A2", "A3"],
+        default="A0",
+        help=(
+            "Privacy assurance level for negotiations: "
+            "A0=zero privacy (standard), A1=claimed privacy (NDAI linguistic), "
+            "A2=attested privacy (tool-verified enclave), A3=invalid attestation."
+        ),
     )
     parser.add_argument(
         "--debug",
@@ -266,6 +269,12 @@ async def main():
     else:
         config.COUNTRY_SPECIFIC_PROMPTS = False
         logger.info("Using generic prompts for all powers")
+
+    # Privacy level determines negotiation mode.
+    # A1/A2/A3 use NDAI negotiation flow; A0 uses standard.
+    config.PRIVACY_LEVEL = args.privacy_level
+    use_ndai = config.PRIVACY_LEVEL in ("A1", "A2", "A3")
+    logger.info(f"Privacy level: {config.PRIVACY_LEVEL} (use_ndai={use_ndai})")
 
     if args.max_year == None:
         if args.end_at_phase:
@@ -376,11 +385,11 @@ async def main():
         # --- 4b. Pre-Order Generation Steps (Movement Phases Only) ---
         if current_short_phase.endswith("M"):
             if run_config.num_negotiation_rounds > 0:
-                ndai = getattr(run_config, "ndai", False)
-                if ndai:
+                if use_ndai:
                     game_history = await conduct_ndai_negotiations(
                         game, agents, game_history, model_error_stats,
                         llm_log_file_path, max_rounds=run_config.num_negotiation_rounds,
+                        privacy_level=config.PRIVACY_LEVEL,
                     )
                 else:
                     game_history = await conduct_negotiations(
@@ -393,7 +402,7 @@ async def main():
                 )
             
             neg_diary_tasks = [
-                agent.generate_negotiation_diary_entry(game, game_history, llm_log_file_path, ndai=getattr(run_config, "ndai", False))
+                agent.generate_negotiation_diary_entry(game, game_history, llm_log_file_path, ndai=use_ndai)
                 for agent in agents.values() if not game.powers[agent.power_name].is_eliminated()
             ]
             if neg_diary_tasks:
@@ -500,7 +509,7 @@ async def main():
         # Phase Result Diary Entries
         if current_short_phase.endswith("M"):
             phase_result_diary_tasks = [
-                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase, ndai=getattr(run_config, "ndai", False))
+                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase, ndai=use_ndai)
                 for agent in agents.values() if not game.powers[agent.power_name].is_eliminated()
             ]
             if phase_result_diary_tasks:
