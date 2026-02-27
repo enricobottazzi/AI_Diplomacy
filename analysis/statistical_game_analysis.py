@@ -526,6 +526,10 @@ class StatisticalGameAnalyzer:
         features['relationships_start_phase'] = '|'.join(
             f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_start.items()
         )
+
+        # Relationship distribution counts at end of phase
+        rel_counts = self._count_relationships(relationships_end)
+        features.update(rel_counts)
         
         return features
     
@@ -848,7 +852,13 @@ class StatisticalGameAnalyzer:
                 'avg_relationship_stability_per_phase': 0.0,
                 'avg_sentiment_toward_others': 0.0,
                 'avg_sentiment_from_others': 0.0,
-                'avg_relationship_polarization_per_phase': 0.0,
+                'avg_relationship_intensity_per_phase': 0.0,
+                'avg_relationship_reciprocity': 0.0,
+                'avg_count_allies_per_phase': 0.0,
+                'avg_count_friendly_per_phase': 0.0,
+                'avg_count_neutrals_per_phase': 0.0,
+                'avg_count_unfriendly_per_phase': 0.0,
+                'avg_count_enemies_per_phase': 0.0,
                 'avg_response_tokens_per_interaction': 0.0,
                 'avg_territories_controlled_per_phase': 0.0,
                 'avg_territory_change_per_phase': 0.0,
@@ -954,7 +964,13 @@ class StatisticalGameAnalyzer:
         supply_centers_per_phase = []
         military_units_per_phase = []
         relationship_stability_values = []
-        relationship_polarization_values = []
+        relationship_intensity_values = []
+        relationship_reciprocity_values = []
+        count_allies_values = []
+        count_friendly_values = []
+        count_neutrals_values = []
+        count_unfriendly_values = []
+        count_enemies_values = []
         
         # Track previous relationships for stability calculation
         prev_relationships = None
@@ -987,13 +1003,22 @@ class StatisticalGameAnalyzer:
             if power in agent_relationships:
                 power_relationships = agent_relationships[power]
                 
-                # Calculate sentiment toward others
+                # Calculate sentiment toward others and intensity
                 if power_relationships:
                     outgoing_values = [self.relationship_values.get(rel, 0) for rel in power_relationships.values()]
                     if outgoing_values:
                         sentiment_toward_values.append(statistics.mean(outgoing_values))
-                    if len(outgoing_values) > 1:
-                        relationship_polarization_values.append(statistics.stdev(outgoing_values))
+                        relationship_intensity_values.append(
+                            statistics.mean(abs(v) for v in outgoing_values)
+                        )
+
+                    # Relationship distribution counts
+                    rel_counts = self._count_relationships(power_relationships)
+                    count_allies_values.append(rel_counts['count_allies'])
+                    count_friendly_values.append(rel_counts['count_friendly'])
+                    count_neutrals_values.append(rel_counts['count_neutrals'])
+                    count_unfriendly_values.append(rel_counts['count_unfriendly'])
+                    count_enemies_values.append(rel_counts['count_enemies'])
                 
                 # Calculate sentiment from others
                 incoming_values = []
@@ -1002,6 +1027,18 @@ class StatisticalGameAnalyzer:
                         incoming_values.append(self.relationship_values.get(relationships[power], 0))
                 if incoming_values:
                     sentiment_from_values.append(statistics.mean(incoming_values))
+
+                # Reciprocity: how symmetric are bilateral relationships?
+                # For each pair (power, other), compute 1 - |power→other - other→power| / 4
+                reciprocity_pairs = []
+                for other_power, other_rels in agent_relationships.items():
+                    if other_power == power:
+                        continue
+                    my_view = self.relationship_values.get(power_relationships.get(other_power, 'Neutral'), 0)
+                    their_view = self.relationship_values.get(other_rels.get(power, 'Neutral'), 0)
+                    reciprocity_pairs.append(1.0 - abs(my_view - their_view) / 4.0)
+                if reciprocity_pairs:
+                    relationship_reciprocity_values.append(statistics.mean(reciprocity_pairs))
                 
                 # Calculate relationship stability
                 if prev_relationships is not None:
@@ -1110,8 +1147,16 @@ class StatisticalGameAnalyzer:
         
         if relationship_stability_values:
             features['avg_relationship_stability_per_phase'] = statistics.mean(relationship_stability_values)
-        if relationship_polarization_values:
-            features['avg_relationship_polarization_per_phase'] = statistics.mean(relationship_polarization_values)
+        if relationship_intensity_values:
+            features['avg_relationship_intensity_per_phase'] = statistics.mean(relationship_intensity_values)
+        if relationship_reciprocity_values:
+            features['avg_relationship_reciprocity'] = statistics.mean(relationship_reciprocity_values)
+        if count_allies_values:
+            features['avg_count_allies_per_phase'] = statistics.mean(count_allies_values)
+            features['avg_count_friendly_per_phase'] = statistics.mean(count_friendly_values)
+            features['avg_count_neutrals_per_phase'] = statistics.mean(count_neutrals_values)
+            features['avg_count_unfriendly_per_phase'] = statistics.mean(count_unfriendly_values)
+            features['avg_count_enemies_per_phase'] = statistics.mean(count_enemies_values)
         
         if total_responses > 0:
             features['avg_response_tokens_per_interaction'] = total_tokens / total_responses
@@ -1212,6 +1257,29 @@ class StatisticalGameAnalyzer:
                 return phases[i-1]
         return None
     
+    def _count_relationships(self, relationships: dict) -> dict:
+        """Count how many relationships fall into each category."""
+        counts = {
+            'count_allies': 0,
+            'count_friendly': 0,
+            'count_neutrals': 0,
+            'count_unfriendly': 0,
+            'count_enemies': 0,
+        }
+        for rel_label in relationships.values():
+            val = self.relationship_values.get(rel_label, 0)
+            if val == 2:
+                counts['count_allies'] += 1
+            elif val == 1:
+                counts['count_friendly'] += 1
+            elif val == 0:
+                counts['count_neutrals'] += 1
+            elif val == -1:
+                counts['count_unfriendly'] += 1
+            elif val == -2:
+                counts['count_enemies'] += 1
+        return counts
+
     def _calculate_relationship_similarity(self, prev_relationships: dict, current_relationships: dict) -> float:
         """Calculate similarity between two relationship dictionaries."""
         if not prev_relationships or not current_relationships:
@@ -1460,7 +1528,14 @@ class StatisticalGameAnalyzer:
             'supply_centers_gained_vs_prev_phase',
             'military_units_gained_vs_prev_phase',
             'relationships_start_phase',
-            'relationships_end_phase'
+            'relationships_end_phase',
+
+            # === RELATIONSHIP DISTRIBUTION ===
+            'count_allies',
+            'count_friendly',
+            'count_neutrals',
+            'count_unfriendly',
+            'count_enemies',
         ]
 
         # ensure order columns
@@ -1533,7 +1608,13 @@ class StatisticalGameAnalyzer:
             'avg_relationship_stability_per_phase', 
             'avg_sentiment_toward_others',
             'avg_sentiment_from_others',
-            'avg_relationship_polarization_per_phase',
+            'avg_relationship_intensity_per_phase',
+            'avg_relationship_reciprocity',
+            'avg_count_allies_per_phase',
+            'avg_count_friendly_per_phase',
+            'avg_count_neutrals_per_phase',
+            'avg_count_unfriendly_per_phase',
+            'avg_count_enemies_per_phase',
             'avg_response_tokens_per_interaction',
             'avg_territories_controlled_per_phase',
             'avg_territory_change_per_phase',
