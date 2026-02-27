@@ -94,6 +94,8 @@ class StatisticalGameAnalyzer:
         "retreat"
     ]
     
+    NDAI_INTENTS = ["CONTINUE", "PROPOSE", "ACCEPT"]
+
     def __init__(self):
         """Initialize analyzer with configuration constants."""
         self.relationship_values = self.RELATIONSHIP_VALUES
@@ -500,6 +502,8 @@ class StatisticalGameAnalyzer:
         if response_type == 'negotiation_message':
             negotiation_features = self._extract_negotiation_features(power, phase, llm_responses, phase_data, game_data)
             features.update(negotiation_features)
+            ndai_features = self._extract_ndai_phase_features(power, phase, llm_responses, phase_data, game_data)
+            features.update(ndai_features)
         elif response_type in ['negotiation_diary', 'state_update', 'initial_state_setup']:
             reflection_features = self._extract_reflection_features(power, phase, llm_responses, phase_data, game_data, response_type)
             features.update(reflection_features)
@@ -880,7 +884,11 @@ class StatisticalGameAnalyzer:
             }
 
             features['game_score'] = game_scores.get(power)
-            
+
+            # === NDAI METRICS ===
+            ndai_totals = self._aggregate_ndai_game_features(power, llm_responses, game_data)
+            features.update(ndai_totals)
+
             # === CALCULATE FINAL STATE METRICS ===
             if game_data['phases']:
                 final_phase = game_data['phases'][-1]
@@ -1431,6 +1439,11 @@ class StatisticalGameAnalyzer:
             'percent_messages_to_neutrals',
             'average_message_length_chars',
             
+            # === NDAI METRICS (populated only for NDAI games) ===
+            'ndai_messages_continue',
+            'ndai_messages_propose',
+            'ndai_messages_accept',
+
             # === REFLECTION METRICS ===
             'llm_response_tokens_estimated',
             'llm_response_time_ms',
@@ -1551,6 +1564,11 @@ class StatisticalGameAnalyzer:
 
             # === COORDINATION ===
             'coordination_score',
+
+            # === NDAI METRICS (populated only for NDAI games) ===
+            'ndai_messages_continue',
+            'ndai_messages_propose',
+            'ndai_messages_accept',
         ]
 
         # ensure order-total columns
@@ -1622,7 +1640,129 @@ class StatisticalGameAnalyzer:
         """Check if status indicates success."""
         status_lower = status.lower()
         return any(indicator in status_lower for indicator in ['true', 'success:', 'success', 'partial'])
-    
+
+    # ────────────────── NDAI HELPERS ──────────────────────────────
+
+    @staticmethod
+    def _is_ndai_game(game_data: dict) -> bool:
+        """Detect whether this game was run in NDAI mode via overview.jsonl."""
+        run_dir = game_data.get("run_dir", "")
+        if not run_dir:
+            return False
+        overview_path = Path(run_dir) / "overview.jsonl"
+        if not overview_path.exists():
+            return False
+        with open(overview_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    if isinstance(obj, dict) and obj.get("ndai") is True:
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _parse_ndai_intents_from_response(self, raw_response: str) -> List[str]:
+        """Extract the list of intent values from an NDAI negotiation raw_response.
+
+        Returns a list like ["CONTINUE", "PROPOSE", "ACCEPT", "CONTINUE"] —
+        one entry per message object found in the JSON array.
+        """
+        intents: List[str] = []
+        text = raw_response.strip()
+
+        # The expected format is a top-level JSON array of message objects.
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                for msg in parsed:
+                    if isinstance(msg, dict):
+                        intents.append(msg.get("intent", "CONTINUE").upper())
+                return intents
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: try to find a JSON array inside markdown fences
+        array_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+        if array_match:
+            try:
+                parsed = json.loads(array_match.group(1))
+                if isinstance(parsed, list):
+                    for msg in parsed:
+                        if isinstance(msg, dict):
+                            intents.append(msg.get("intent", "CONTINUE").upper())
+                    return intents
+            except json.JSONDecodeError:
+                pass
+
+        # Last resort: extract individual JSON objects
+        for json_str in re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text):
+            try:
+                msg = json.loads(json_str)
+                if isinstance(msg, dict) and "content" in msg:
+                    intents.append(msg.get("intent", "CONTINUE").upper())
+            except json.JSONDecodeError:
+                continue
+
+        return intents
+
+    def _extract_ndai_phase_features(self, power: str, phase: str,
+                                     llm_responses: List[dict],
+                                     phase_data: dict,
+                                     game_data: dict) -> dict:
+        """Extract NDAI-specific metrics for one power in one phase.
+
+        Returns zeros for non-NDAI games so the columns are always present.
+        """
+        features = {
+            'ndai_messages_continue': 0,
+            'ndai_messages_propose': 0,
+            'ndai_messages_accept': 0,
+        }
+
+        if not self._is_ndai_game(game_data):
+            return features
+
+        # Parse intents from all negotiation_message responses for this power/phase
+        for response in llm_responses:
+            if (response.get('power') == power and
+                    response.get('phase') == phase and
+                    response.get('response_type') == 'negotiation_message'):
+                for intent in self._parse_ndai_intents_from_response(
+                        response.get('raw_response', '')):
+                    if intent == 'CONTINUE':
+                        features['ndai_messages_continue'] += 1
+                    elif intent == 'PROPOSE':
+                        features['ndai_messages_propose'] += 1
+                    elif intent == 'ACCEPT':
+                        features['ndai_messages_accept'] += 1
+
+        return features
+
+    def _aggregate_ndai_game_features(self, power: str,
+                                      llm_responses: List[dict],
+                                      game_data: dict) -> dict:
+        """Aggregate NDAI metrics across all phases for one power (game level).
+
+        Returns zeros for non-NDAI games so the columns are always present.
+        """
+        totals = {
+            'ndai_messages_continue': 0,
+            'ndai_messages_propose': 0,
+            'ndai_messages_accept': 0,
+        }
+
+        if not self._is_ndai_game(game_data):
+            return totals
+
+        for phase in game_data.get('phases', []):
+            phase_feats = self._extract_ndai_phase_features(
+                power, phase['name'], llm_responses, phase, game_data
+            )
+            for k in totals:
+                totals[k] += phase_feats[k]
+
+        return totals
 
 
 def main():
