@@ -8,7 +8,6 @@ PROPOSE+ACCEPT deals.
 import asyncio
 import copy
 import logging
-import random
 from typing import Dict, List, Tuple, TYPE_CHECKING
 
 from .utils import gather_possible_orders, normalize_recipient_name
@@ -46,6 +45,7 @@ async def run_ndai_negotiations(
 
     ephemeral_history = copy.deepcopy(game_history)
     pending_proposals: Dict[Tuple[str, str], str] = {}
+    proposal_round: Dict[Tuple[str, str], int] = {}
     agreed_statements: Dict[Tuple[str, str], str] = {}
     last_sent_round: Dict[Tuple[str, str], int] = {}
     awaiting_reply: Dict[Tuple[str, str], bool] = {}
@@ -130,26 +130,33 @@ async def run_ndai_negotiations(
             rev = (m["rec"], m["pn"])
             if rev in pending_proposals:
                 stmt = pending_proposals.pop(rev)
+                proposal_round.pop(rev, None)
                 agreed_statements[rev] = stmt
                 m["display"] += f"\n[Accepted Deal: {stmt[:120]}]"
                 logger.info(f"[NDAI] AGREEMENT: {m['pn']} accepts {m['rec']}'s proposal")
             else:
                 m["display"] += f"\n[Note: ACCEPT ignored — no pending proposal from {m['rec']}]"
 
-        # ── PROPOSEs second, random order ──
-        prop_idx = [i for i, m in enumerate(round_msgs) if m["intent"] == "PROPOSE"]
-        random.shuffle(prop_idx)
-        for idx in prop_idx:
-            m = round_msgs[idx]
+        # ── PROPOSEs second ──
+        for m in round_msgs:
+            if m["intent"] != "PROPOSE":
+                continue
             m["display"] = f"[Intent: PROPOSE] {m['content']}"
+            fwd = (m["pn"], m["rec"])
             rev = (m["rec"], m["pn"])
-            if rev in pending_proposals:
+            if rev in pending_proposals and proposal_round.get(rev) < rnd:
+                # Deliberate counter-proposal: reverse was from a previous
+                # round, so this agent saw it and chose to counter.
                 old = pending_proposals.pop(rev)
+                proposal_round.pop(rev, None)
                 m["display"] += f"\n[Proposed Deal: {m['js']}]"
                 m["display"] += f"\n[Note: Supersedes {m['rec']}'s proposal: {old[:80]}...]"
             else:
+                # No reverse pending, or reverse is from the same round
+                # (concurrent cross-proposal — both survive).
                 m["display"] += f"\n[Proposed Deal: {m['js']}]"
-            pending_proposals[(m["pn"], m["rec"])] = m["js"]
+            pending_proposals[fwd] = m["js"]
+            proposal_round[fwd] = rnd
             logger.info(f"[NDAI] PROPOSE: {m['pn']}->{m['rec']}: {m['js'][:100]}")
 
         # ── CONTINUEs last ──
