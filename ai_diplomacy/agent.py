@@ -466,7 +466,7 @@ class DiplomacyAgent:
     async def generate_negotiation_diary_entry(self, game: "Game", game_history: GameHistory, log_file_path: str, ndai: bool = False):
         """
         Generates a diary entry summarizing negotiations and updates relationships.
-        When ndai=True, uses deals instead of messages for the diary context.
+        When ndai=True, uses pacts instead of messages for the diary context.
         This method now includes comprehensive LLM interaction logging.
         """
         logger.info(f"[{self.power_name}] Generating negotiation diary entry for {game.current_short_phase}...")
@@ -490,10 +490,10 @@ class DiplomacyAgent:
 
             if ndai:
                 section_label = (
-                    "DEALS THIS ROUND (each deal is signed by you and another power, "
-                    "this information is only available to the signers of the deal and not to other powers)"
+                    "PACTS THIS ROUND (each pact is signed by you and another power, "
+                    "this information is only available to the signers of the pact and not to other powers)"
                 )
-                messages_this_round = game_history.get_deals_this_round(
+                messages_this_round = game_history.get_pacts_this_round(
                     power_name=self.power_name, current_phase_name=game.current_short_phase
                 )
             else:
@@ -885,7 +885,7 @@ class DiplomacyAgent:
 
             # Get recent negotiations for this phase (use phase_name: messages were stored for the completed phase, not game.current_short_phase which has already advanced)
             if ndai:
-                messages_this_round = game_history.get_deals_this_round(power_name=self.power_name, current_phase_name=phase_name)
+                messages_this_round = game_history.get_pacts_this_round(power_name=self.power_name, current_phase_name=phase_name)
             else:
                 messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=phase_name)
                 if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
