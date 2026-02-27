@@ -1169,7 +1169,7 @@ class StatisticalGameAnalyzer:
                         'phase': phase,
                         'content': msg_data.get('content', ''),
                         'is_global': msg_data.get('message_type') == 'global',
-                        'recipient_power': msg_data.get('recipient') if msg_data.get('message_type') == 'private' else None
+                        'recipient_power': msg_data.get('recipient')
                     }
                     messages.append(message)
             except json.JSONDecodeError:
