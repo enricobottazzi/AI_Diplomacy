@@ -5,7 +5,7 @@
 | Intent | Description |
 |--------|-------------|
 | **CONTINUE** | Regular message, no proposal action |
-| **PROPOSE** | Propose a pact (must include `pact`). A deliberate counter-proposal (in a later round, after seeing the other side's proposal) supersedes the reverse pending proposal. Concurrent cross-proposals (same round) both survive |
+| **PROPOSE** | Propose a joint statement (must include `joint_statement`). A deliberate counter-proposal (in a later round, after seeing the other side's proposal) supersedes the reverse pending proposal. Concurrent cross-proposals (same round) both survive |
 | **ACCEPT** | Accept the most recent proposal from the recipient |
 
 ## Processing Order Within a Round
@@ -30,7 +30,7 @@ For a pair of powers **(A, B)**, the protocol tracks `pending_proposals[(X, Y)]`
 | CONTINUE | PROPOSE | `pending_proposals[(B,A)]` created |
 | CONTINUE | ACCEPT | B's ACCEPT ignored (warning: no pending proposal) |
 | PROPOSE | CONTINUE | `pending_proposals[(A,B)]` created |
-| PROPOSE | PROPOSE | Both created concurrently. Since neither agent saw the other's proposal, both become pending: `pending_proposals[(A,B)]` and `pending_proposals[(B,A)]`. In the next round, either side can ACCEPT the other's pact |
+| PROPOSE | PROPOSE | Both created concurrently. Since neither agent saw the other's proposal, both become pending: `pending_proposals[(A,B)]` and `pending_proposals[(B,A)]`. In the next round, either side can ACCEPT the other's joint statement |
 | PROPOSE | ACCEPT | ACCEPT processed first → ignored (no pending proposal). Then PROPOSE creates `pending_proposals[(A,B)]` or `(B,A)` |
 | ACCEPT | CONTINUE | A's ACCEPT ignored (no pending proposal) |
 | ACCEPT | PROPOSE | ACCEPT processed first → ignored. Then PROPOSE creates `pending_proposals[(B,A)]` |
@@ -74,7 +74,7 @@ For a pair of powers **(A, B)**, the protocol tracks `pending_proposals[(X, Y)]`
 
 4. **Deliberate counter-proposal clears reverse.** When a PROPOSE from B→A arrives in a **subsequent round** (B has seen A's pending proposal in the ephemeral history), it is treated as a deliberate counter-proposal and clears `pending_proposals[(A,B)]`.
 
-5. **Only PROPOSE+ACCEPT = pact.** A pact requires an explicit PROPOSE followed by an explicit ACCEPT (typically in a later round).
+5. **Only PROPOSE+ACCEPT = joint statement.** A joint statement requires an explicit PROPOSE followed by an explicit ACCEPT (typically in a later round).
 
 6. **Expired proposals are logged.** Any pending proposal still active when the zone exits is logged as a warning.
 

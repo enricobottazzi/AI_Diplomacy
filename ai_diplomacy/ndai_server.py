@@ -2,7 +2,7 @@
 NDAI zone negotiation server.
 
 Runs inside the TEE. All messages are discarded on exit except
-PROPOSE+ACCEPT pacts.
+PROPOSE+ACCEPT joint statements.
 """
 
 import asyncio
@@ -110,7 +110,7 @@ async def run_ndai_negotiations(
                 awaiting_reply[(recipient, pname)] = False
 
                 intent = msg.get("intent", "CONTINUE").upper()
-                js = msg.get("pact", "") or msg.get("deal", "")
+                js = msg.get("joint_statement", "")
                 if intent not in ("CONTINUE", "PROPOSE", "ACCEPT"):
                     intent = "CONTINUE"
                 if intent == "PROPOSE" and not js:
@@ -131,7 +131,7 @@ async def run_ndai_negotiations(
                 stmt = pending_proposals.pop(rev)
                 proposal_round.pop(rev, None)
                 agreed_statements[rev] = stmt
-                m["display"] += f"\n[Accepted Pact: {stmt[:120]}]"
+                m["display"] += f"\n[Accepted Joint Statement: {stmt[:120]}]"
                 logger.info(f"[NDAI] AGREEMENT: {m['pn']} accepts {m['rec']}'s proposal")
             else:
                 m["display"] += f"\n[Note: ACCEPT ignored — no pending proposal from {m['rec']}]"
@@ -148,12 +148,12 @@ async def run_ndai_negotiations(
                 # round, so this agent saw it and chose to counter.
                 old = pending_proposals.pop(rev)
                 proposal_round.pop(rev, None)
-                m["display"] += f"\n[Proposed Pact: {m['js']}]"
+                m["display"] += f"\n[Proposed Joint Statement: {m['js']}]"
                 m["display"] += f"\n[Note: Supersedes {m['rec']}'s proposal: {old[:80]}...]"
             else:
                 # No reverse pending, or reverse is from the same round
                 # (concurrent cross-proposal — both survive).
-                m["display"] += f"\n[Proposed Pact: {m['js']}]"
+                m["display"] += f"\n[Proposed Joint Statement: {m['js']}]"
             pending_proposals[fwd] = m["js"]
             proposal_round[fwd] = rnd
             logger.info(f"[NDAI] PROPOSE: {m['pn']}->{m['rec']}: {m['js'][:100]}")
@@ -173,7 +173,7 @@ async def run_ndai_negotiations(
         )
 
     # ── Final summary ──
-    logger.info(f"[NDAI] Done phase {phase} | {len(agreed_statements)} pact(s)")
+    logger.info(f"[NDAI] Done phase {phase} | {len(agreed_statements)} joint statement(s)")
     for (proposer, accepter), stmt in agreed_statements.items():
         logger.info(f"[NDAI]   {proposer}<->{accepter}: {stmt[:150]}")
     for (proposer, recipient), stmt in pending_proposals.items():
