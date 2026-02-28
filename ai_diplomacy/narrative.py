@@ -22,7 +22,7 @@ from diplomacy.engine.game import Game
 # Import to get model configuration and client loading
 from .utils import get_special_models
 from .clients import load_model_client
-from ..config import config
+from config import config
 
 LOGGER = logging.getLogger(__name__)
 

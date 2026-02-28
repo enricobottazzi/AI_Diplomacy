@@ -94,6 +94,8 @@ class StatisticalGameAnalyzer:
         "retreat"
     ]
     
+    NDAI_INTENTS = ["CONTINUE", "PROPOSE", "ACCEPT"]
+
     def __init__(self):
         """Initialize analyzer with configuration constants."""
         self.relationship_values = self.RELATIONSHIP_VALUES
@@ -272,10 +274,12 @@ class StatisticalGameAnalyzer:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             for metric in ("total", "success", "bounce", "void", "invalid"):
                 features[f"orders_{plural}_{metric}"] = 0
-            features[f"orders_{plural}_success_rate"] = 0.0      # ← new
+            features[f"orders_{plural}_success_rate"] = 0.0
 
         orders_by_type = phase_data.get("order_results", {}).get(power, {})
         if not orders_by_type:
+            features["orders_supports_self_total"] = 0
+            features["orders_supports_others_total"] = 0
             return features
 
         for otype, order_list in orders_by_type.items():
@@ -305,9 +309,68 @@ class StatisticalGameAnalyzer:
             tot  = features[f"orders_{plural}_total"]
             features[f"orders_{plural}_success_rate"] = succ / tot if tot else 0.0
 
+        # ── cross-power support breakdown ──
+        self_sup, other_sup = self._classify_support_orders(power, phase_data)
+        features["orders_supports_self_total"] = self_sup
+        features["orders_supports_others_total"] = other_sup
+
         return features
 
+    # ────────────────── CROSS-POWER SUPPORT HELPERS ──────────────
+    _SUPPORT_RE = re.compile(r'[AF]\s+\S+\s+S\s+([AF]\s+\S+)')
 
+    @staticmethod
+    def _unit_location_key(unit_str: str) -> str:
+        """Strip coastal suffixes so 'F STP/SC' matches 'F STP'."""
+        return unit_str.split('/')[0]
+
+    def _classify_support_orders(self, power: str, phase_data: dict) -> Tuple[int, int]:
+        """Return (self_support_count, cross_power_support_count) for *power* in one phase."""
+        units = phase_data.get('state', {}).get('units', {})
+        loc_to_owner: dict[str, str] = {}
+        for owner, unit_list in units.items():
+            for u in unit_list:
+                loc_to_owner[self._unit_location_key(u)] = owner
+
+        self_count = 0
+        other_count = 0
+
+        orders_by_type = phase_data.get('order_results', {}).get(power, {})
+        for otype, order_list in orders_by_type.items():
+            if otype.lower() != 'support':
+                continue
+            for entry in order_list:
+                m = self._SUPPORT_RE.match(entry.get('order', ''))
+                if not m:
+                    continue
+                supported_unit = self._unit_location_key(m.group(1))
+                owner = loc_to_owner.get(supported_unit)
+                if owner == power:
+                    self_count += 1
+                elif owner is not None:
+                    other_count += 1
+
+        return self_count, other_count
+
+    def _get_cross_support_targets(self, power: str, phase_data: dict) -> set:
+        """Return the set of powers that received a support order from *power* in this phase."""
+        units = phase_data.get('state', {}).get('units', {})
+        loc_to_owner: dict[str, str] = {}
+        for owner, unit_list in units.items():
+            for u in unit_list:
+                loc_to_owner[self._unit_location_key(u)] = owner
+
+        targets = set()
+        for otype, order_list in phase_data.get('order_results', {}).get(power, {}).items():
+            if otype.lower() != 'support':
+                continue
+            for entry in order_list:
+                m = self._SUPPORT_RE.match(entry.get('order', ''))
+                if m:
+                    owner = loc_to_owner.get(self._unit_location_key(m.group(1)))
+                    if owner and owner != power:
+                        targets.add(owner)
+        return targets
 
     # ────────────────── GAME-LEVEL ORDER TOTALS ──────────────────
     def _aggregate_order_results(self, power: str, game_data: dict) -> dict:
@@ -320,7 +383,10 @@ class StatisticalGameAnalyzer:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             for metric in ("total", "success", "bounce", "void", "invalid"):
                 totals[f"orders_{plural}_{metric}"] = 0
-            totals[f"orders_{plural}_success_rate"] = 0.0          # ← new
+            totals[f"orders_{plural}_success_rate"] = 0.0
+
+        total_self_sup = 0
+        total_other_sup = 0
 
         for phase in game_data.get("phases", []):
             orders_by_type = phase.get("order_results", {}).get(power, {})
@@ -347,12 +413,19 @@ class StatisticalGameAnalyzer:
                         case _ if result in ("void", "void: no effect", ""):
                             totals[f"{key_base}_void"] += 1
 
+            self_sup, other_sup = self._classify_support_orders(power, phase)
+            total_self_sup += self_sup
+            total_other_sup += other_sup
+
         # ── derive success rates ──
         for ot in self.ORDER_TYPES:
             plural = f"{ot}s" if not ot.endswith("s") else ot
             succ = totals[f"orders_{plural}_success"]
             tot  = totals[f"orders_{plural}_total"]
             totals[f"orders_{plural}_success_rate"] = succ / tot if tot else 0.0
+
+        totals["orders_supports_self_total"] = total_self_sup
+        totals["orders_supports_others_total"] = total_other_sup
 
         return totals
 
@@ -427,8 +500,10 @@ class StatisticalGameAnalyzer:
         
         # Add response-type specific features
         if response_type == 'negotiation_message':
-            negotiation_features = self._extract_negotiation_features(power, phase, llm_responses, phase_data)
+            negotiation_features = self._extract_negotiation_features(power, phase, llm_responses, phase_data, game_data)
             features.update(negotiation_features)
+            ndai_features = self._extract_ndai_phase_features(power, phase, llm_responses, phase_data, game_data)
+            features.update(ndai_features)
         elif response_type in ['negotiation_diary', 'state_update', 'initial_state_setup']:
             reflection_features = self._extract_reflection_features(power, phase, llm_responses, phase_data, game_data, response_type)
             features.update(reflection_features)
@@ -437,16 +512,30 @@ class StatisticalGameAnalyzer:
         game_state_features = self._extract_game_state_features(power, phase, phase_data, game_data)
         features.update(game_state_features)
 
-        # Relationship snapshot column (e.g. "AUSTRIA:-1|FRANCE:2")
-        relationships_for_phase = self._get_relationships_for_phase(power, phase, phase_data)
-        features['relationships'] = '|'.join(
-            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_for_phase.items()
+        # Relationship snapshot columns (e.g. "AUSTRIA:-1|FRANCE:2")
+        relationships_end = self._get_relationships_for_phase(power, phase, phase_data)
+        features['relationships_end_phase'] = '|'.join(
+            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_end.items()
         )
+
+        prev_phase_data = self._get_previous_phase_data(phase, game_data)
+        if prev_phase_data is not None:
+            relationships_start = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+        else:
+            relationships_start = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
+        features['relationships_start_phase'] = '|'.join(
+            f"{p}:{self.relationship_values.get(r, 0)}" for p, r in relationships_start.items()
+        )
+
+        # Relationship distribution counts at end of phase
+        rel_counts = self._count_relationships(relationships_end)
+        features.update(rel_counts)
         
         return features
     
     def _extract_negotiation_features(self, power: str, phase: str, 
-                                    llm_responses: List[dict], phase_data: dict) -> dict:
+                                    llm_responses: List[dict], phase_data: dict,
+                                    game_data: dict) -> dict:
         """Extract negotiation-related metrics for a power in a phase."""
         
         # Get negotiation messages for this power in this phase
@@ -484,8 +573,12 @@ class StatisticalGameAnalyzer:
         if not all_messages:
             return features
             
-        # Get relationships for this phase
-        relationships = self._get_relationships_for_phase(power, phase, phase_data)
+        # Use start-of-phase relationships (previous phase's end state)
+        prev_phase_data = self._get_previous_phase_data(phase, game_data)
+        if prev_phase_data is not None:
+            relationships = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+        else:
+            relationships = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
         
         # Calculate message statistics
         features['total_messages_sent'] = len(all_messages)
@@ -614,7 +707,8 @@ class StatisticalGameAnalyzer:
             'territories_gained_vs_prev_phase': 0,
             'supply_centers_gained_vs_prev_phase': 0,
             'military_units_gained_vs_prev_phase': 0,
-            'relationships': ''
+            'relationships_start_phase': '',
+            'relationships_end_phase': ''
         }
         
         # Get current state
@@ -642,13 +736,92 @@ class StatisticalGameAnalyzer:
             features['territories_gained_vs_prev_phase'] = features['territories_controlled_count'] - len(prev_influence)
             
         return features
-    
+
+    @staticmethod
+    def _compute_hhi(counts: List[int]) -> float:
+        """Herfindahl-Hirschman Index over a list of counts.
+        Returns a value in [1/N, 1]. Higher means more concentrated."""
+        total = sum(counts)
+        if total == 0:
+            return 0.0
+        shares = [c / total for c in counts]
+        return sum(s * s for s in shares)
+
+    @staticmethod
+    def _compute_gini(counts: List[int]) -> float:
+        """Gini coefficient over a list of counts.
+        Returns a value in [0, 1]. Higher means more unequal."""
+        n = len(counts)
+        if n == 0:
+            return 0.0
+        vals = sorted(counts)
+        total = sum(vals)
+        if total == 0:
+            return 0.0
+        cumulative = 0.0
+        weighted_sum = 0.0
+        for i, v in enumerate(vals, 1):
+            cumulative += v
+            weighted_sum += i * v
+        return (2 * weighted_sum) / (n * total) - (n + 1) / n
+
     def _extract_game_features(self, llm_responses: List[dict], game_data: dict) -> List[dict]:
         """Extract game-level features (placeholder for future implementation)."""
         
         game_features = []
         game_scores = self._compute_game_scores(game_data)
-        
+
+        # === PRE-COMPUTE POWER CONCENTRATION (game-level, same for all powers) ===
+        concentration = {
+            'final_hhi_supply_centers': 0.0, 'final_gini_supply_centers': 0.0,
+            'final_hhi_territories': 0.0, 'final_gini_territories': 0.0,
+            'final_hhi_military_units': 0.0, 'final_gini_military_units': 0.0,
+            'avg_hhi_supply_centers': 0.0, 'avg_gini_supply_centers': 0.0,
+            'avg_hhi_territories': 0.0, 'avg_gini_territories': 0.0,
+            'avg_hhi_military_units': 0.0, 'avg_gini_military_units': 0.0,
+        }
+        phases = game_data.get('phases', [])
+        if phases:
+            all_powers = [p.value if hasattr(p, 'value') else p for p in PowerEnum]
+
+            # Final-state concentration
+            final_state = phases[-1].get('state', {})
+            sc_list = [len(final_state.get('centers', {}).get(p, [])) for p in all_powers]
+            terr_list = [len(final_state.get('influence', {}).get(p, [])) for p in all_powers]
+            mu_list = [len(final_state.get('units', {}).get(p, [])) for p in all_powers]
+            concentration['final_hhi_supply_centers'] = self._compute_hhi(sc_list)
+            concentration['final_gini_supply_centers'] = self._compute_gini(sc_list)
+            concentration['final_hhi_territories'] = self._compute_hhi(terr_list)
+            concentration['final_gini_territories'] = self._compute_gini(terr_list)
+            concentration['final_hhi_military_units'] = self._compute_hhi(mu_list)
+            concentration['final_gini_military_units'] = self._compute_gini(mu_list)
+
+            # Average concentration across all phases
+            hhi_sc, gini_sc, hhi_terr, gini_terr, hhi_mu, gini_mu = [], [], [], [], [], []
+            for phase in phases:
+                st = phase.get('state', {})
+                sc = [len(st.get('centers', {}).get(p, [])) for p in all_powers]
+                terr = [len(st.get('influence', {}).get(p, [])) for p in all_powers]
+                mu = [len(st.get('units', {}).get(p, [])) for p in all_powers]
+                if sum(sc) > 0:
+                    hhi_sc.append(self._compute_hhi(sc))
+                    gini_sc.append(self._compute_gini(sc))
+                if sum(terr) > 0:
+                    hhi_terr.append(self._compute_hhi(terr))
+                    gini_terr.append(self._compute_gini(terr))
+                if sum(mu) > 0:
+                    hhi_mu.append(self._compute_hhi(mu))
+                    gini_mu.append(self._compute_gini(mu))
+            if hhi_sc:
+                concentration['avg_hhi_supply_centers'] = statistics.mean(hhi_sc)
+                concentration['avg_gini_supply_centers'] = statistics.mean(gini_sc)
+            if hhi_terr:
+                concentration['avg_hhi_territories'] = statistics.mean(hhi_terr)
+                concentration['avg_gini_territories'] = statistics.mean(gini_terr)
+            if hhi_mu:
+                concentration['avg_hhi_military_units'] = statistics.mean(hhi_mu)
+                concentration['avg_gini_military_units'] = statistics.mean(gini_mu)
+
         for power in PowerEnum:
             features = {
                 # === IDENTIFIERS ===
@@ -679,14 +852,38 @@ class StatisticalGameAnalyzer:
                 'avg_relationship_stability_per_phase': 0.0,
                 'avg_sentiment_toward_others': 0.0,
                 'avg_sentiment_from_others': 0.0,
+                'avg_relationship_intensity_per_phase': 0.0,
+                'avg_relationship_reciprocity': 0.0,
+                'avg_count_allies_per_phase': 0.0,
+                'avg_count_friendly_per_phase': 0.0,
+                'avg_count_neutrals_per_phase': 0.0,
+                'avg_count_unfriendly_per_phase': 0.0,
+                'avg_count_enemies_per_phase': 0.0,
                 'avg_response_tokens_per_interaction': 0.0,
                 'avg_territories_controlled_per_phase': 0.0,
+                'avg_territory_change_per_phase': 0.0,
                 'avg_supply_centers_owned_per_phase': 0.0,
+                'avg_supply_center_change_per_phase': 0.0,
                 'avg_military_units_per_phase': 0.0,
+                'avg_military_units_change_per_phase': 0.0,
                 'percent_messages_to_allies_overall': 0.0,
                 'percent_messages_to_enemies_overall': 0.0,
                 'percent_global_vs_private_overall': 0.0,
-                
+
+                # === POWER CONCENTRATION (Game-level, same for all powers) ===
+                'final_hhi_supply_centers': 0.0,
+                'final_gini_supply_centers': 0.0,
+                'final_hhi_territories': 0.0,
+                'final_gini_territories': 0.0,
+                'final_hhi_military_units': 0.0,
+                'final_gini_military_units': 0.0,
+                'avg_hhi_supply_centers': 0.0,
+                'avg_gini_supply_centers': 0.0,
+                'avg_hhi_territories': 0.0,
+                'avg_gini_territories': 0.0,
+                'avg_hhi_military_units': 0.0,
+                'avg_gini_military_units': 0.0,
+
                 # === FAILURE ANALYSIS TOTALS (HARD MODE) ===
                 'total_llm_calls_overall': 0,
                 'total_failed_llm_calls': 0,
@@ -697,7 +894,11 @@ class StatisticalGameAnalyzer:
             }
 
             features['game_score'] = game_scores.get(power)
-            
+
+            # === NDAI METRICS ===
+            ndai_totals = self._aggregate_ndai_game_features(power, llm_responses, game_data)
+            features.update(ndai_totals)
+
             # === CALCULATE FINAL STATE METRICS ===
             if game_data['phases']:
                 final_phase = game_data['phases'][-1]
@@ -734,7 +935,19 @@ class StatisticalGameAnalyzer:
             
             # === CALCULATE AVERAGED BEHAVIORAL METRICS ===
             self._calculate_averaged_game_metrics(features, power, llm_responses, game_data)
-            
+
+            # === COORDINATION SCORE (reciprocal cross-power support) ===
+            coordination = 0
+            for phase in game_data.get('phases', []):
+                my_targets = self._get_cross_support_targets(power, phase)
+                for other in my_targets:
+                    if power in self._get_cross_support_targets(other, phase):
+                        coordination += 1
+            features['coordination_score'] = coordination
+
+            # === ASSIGN POWER CONCENTRATION (same for every power in this game) ===
+            features.update(concentration)
+
             game_features.append(features)
             
         return game_features
@@ -751,6 +964,13 @@ class StatisticalGameAnalyzer:
         supply_centers_per_phase = []
         military_units_per_phase = []
         relationship_stability_values = []
+        relationship_intensity_values = []
+        relationship_reciprocity_values = []
+        count_allies_values = []
+        count_friendly_values = []
+        count_neutrals_values = []
+        count_unfriendly_values = []
+        count_enemies_values = []
         
         # Track previous relationships for stability calculation
         prev_relationships = None
@@ -770,6 +990,10 @@ class StatisticalGameAnalyzer:
             supply_centers_per_phase.append(supply_centers)
             military_units_per_phase.append(military_units)
             
+            # Only collect relationship metrics for movement phases (non-movement phases carry unchanged values)
+            if not phase_name.endswith('M'):
+                continue
+
             # Get relationship data for sentiment calculations
             if 'state_agents' in phase:
                 sa = phase['state_agents']
@@ -779,11 +1003,22 @@ class StatisticalGameAnalyzer:
             if power in agent_relationships:
                 power_relationships = agent_relationships[power]
                 
-                # Calculate sentiment toward others
+                # Calculate sentiment toward others and intensity
                 if power_relationships:
                     outgoing_values = [self.relationship_values.get(rel, 0) for rel in power_relationships.values()]
                     if outgoing_values:
                         sentiment_toward_values.append(statistics.mean(outgoing_values))
+                        relationship_intensity_values.append(
+                            statistics.mean(abs(v) for v in outgoing_values)
+                        )
+
+                    # Relationship distribution counts
+                    rel_counts = self._count_relationships(power_relationships)
+                    count_allies_values.append(rel_counts['count_allies'])
+                    count_friendly_values.append(rel_counts['count_friendly'])
+                    count_neutrals_values.append(rel_counts['count_neutrals'])
+                    count_unfriendly_values.append(rel_counts['count_unfriendly'])
+                    count_enemies_values.append(rel_counts['count_enemies'])
                 
                 # Calculate sentiment from others
                 incoming_values = []
@@ -792,6 +1027,18 @@ class StatisticalGameAnalyzer:
                         incoming_values.append(self.relationship_values.get(relationships[power], 0))
                 if incoming_values:
                     sentiment_from_values.append(statistics.mean(incoming_values))
+
+                # Reciprocity: how symmetric are bilateral relationships?
+                # For each pair (power, other), compute 1 - |power→other - other→power| / 4
+                reciprocity_pairs = []
+                for other_power, other_rels in agent_relationships.items():
+                    if other_power == power:
+                        continue
+                    my_view = self.relationship_values.get(power_relationships.get(other_power, 'Neutral'), 0)
+                    their_view = self.relationship_values.get(other_rels.get(power, 'Neutral'), 0)
+                    reciprocity_pairs.append(1.0 - abs(my_view - their_view) / 4.0)
+                if reciprocity_pairs:
+                    relationship_reciprocity_values.append(statistics.mean(reciprocity_pairs))
                 
                 # Calculate relationship stability
                 if prev_relationships is not None:
@@ -828,10 +1075,13 @@ class StatisticalGameAnalyzer:
                 phase_name = response.get('phase')
                 messages = self._parse_negotiation_messages(response_text, power, phase_name)
                 
-                # Get relationships for this phase
-                phase_data = next((p for p in game_data['phases'] if p['name'] == phase_name), None)
-                if phase_data:
-                    relationships = self._get_relationships_for_phase(power, phase_name, phase_data)
+                # Use start-of-phase relationships (previous phase's end state)
+                prev_phase_data = self._get_previous_phase_data(phase_name, game_data)
+                if prev_phase_data is not None:
+                    relationships = self._get_relationships_for_phase(power, prev_phase_data['name'], prev_phase_data)
+                else:
+                    relationships = {p.value: 'Neutral' for p in PowerEnum if p.value != power}
+                if relationships:
                     
                     for msg in messages:
                         if msg.get('is_global', False):
@@ -873,10 +1123,22 @@ class StatisticalGameAnalyzer:
             
         if territories_per_phase:
             features['avg_territories_controlled_per_phase'] = statistics.mean(territories_per_phase)
+        if len(territories_per_phase) >= 2:
+            territory_deltas = [territories_per_phase[i] - territories_per_phase[i-1]
+                                for i in range(1, len(territories_per_phase))]
+            features['avg_territory_change_per_phase'] = statistics.mean(abs(d) for d in territory_deltas)
         if supply_centers_per_phase:
             features['avg_supply_centers_owned_per_phase'] = statistics.mean(supply_centers_per_phase)
+        if len(supply_centers_per_phase) >= 2:
+            sc_deltas = [supply_centers_per_phase[i] - supply_centers_per_phase[i-1]
+                         for i in range(1, len(supply_centers_per_phase))]
+            features['avg_supply_center_change_per_phase'] = statistics.mean(abs(d) for d in sc_deltas)
         if military_units_per_phase:
             features['avg_military_units_per_phase'] = statistics.mean(military_units_per_phase)
+        if len(military_units_per_phase) >= 2:
+            mu_deltas = [military_units_per_phase[i] - military_units_per_phase[i-1]
+                         for i in range(1, len(military_units_per_phase))]
+            features['avg_military_units_change_per_phase'] = statistics.mean(abs(d) for d in mu_deltas)
             
         if sentiment_toward_values:
             features['avg_sentiment_toward_others'] = statistics.mean(sentiment_toward_values)
@@ -885,6 +1147,16 @@ class StatisticalGameAnalyzer:
         
         if relationship_stability_values:
             features['avg_relationship_stability_per_phase'] = statistics.mean(relationship_stability_values)
+        if relationship_intensity_values:
+            features['avg_relationship_intensity_per_phase'] = statistics.mean(relationship_intensity_values)
+        if relationship_reciprocity_values:
+            features['avg_relationship_reciprocity'] = statistics.mean(relationship_reciprocity_values)
+        if count_allies_values:
+            features['avg_count_allies_per_phase'] = statistics.mean(count_allies_values)
+            features['avg_count_friendly_per_phase'] = statistics.mean(count_friendly_values)
+            features['avg_count_neutrals_per_phase'] = statistics.mean(count_neutrals_values)
+            features['avg_count_unfriendly_per_phase'] = statistics.mean(count_unfriendly_values)
+            features['avg_count_enemies_per_phase'] = statistics.mean(count_enemies_values)
         
         if total_responses > 0:
             features['avg_response_tokens_per_interaction'] = total_tokens / total_responses
@@ -950,7 +1222,7 @@ class StatisticalGameAnalyzer:
                         'phase': phase,
                         'content': msg_data.get('content', ''),
                         'is_global': msg_data.get('message_type') == 'global',
-                        'recipient_power': msg_data.get('recipient') if msg_data.get('message_type') == 'private' else None
+                        'recipient_power': msg_data.get('recipient')
                     }
                     messages.append(message)
             except json.JSONDecodeError:
@@ -985,6 +1257,29 @@ class StatisticalGameAnalyzer:
                 return phases[i-1]
         return None
     
+    def _count_relationships(self, relationships: dict) -> dict:
+        """Count how many relationships fall into each category."""
+        counts = {
+            'count_allies': 0,
+            'count_friendly': 0,
+            'count_neutrals': 0,
+            'count_unfriendly': 0,
+            'count_enemies': 0,
+        }
+        for rel_label in relationships.values():
+            val = self.relationship_values.get(rel_label, 0)
+            if val == 2:
+                counts['count_allies'] += 1
+            elif val == 1:
+                counts['count_friendly'] += 1
+            elif val == 0:
+                counts['count_neutrals'] += 1
+            elif val == -1:
+                counts['count_unfriendly'] += 1
+            elif val == -2:
+                counts['count_enemies'] += 1
+        return counts
+
     def _calculate_relationship_similarity(self, prev_relationships: dict, current_relationships: dict) -> float:
         """Calculate similarity between two relationship dictionaries."""
         if not prev_relationships or not current_relationships:
@@ -1212,6 +1507,11 @@ class StatisticalGameAnalyzer:
             'percent_messages_to_neutrals',
             'average_message_length_chars',
             
+            # === NDAI METRICS (populated only for NDAI games) ===
+            'ndai_messages_continue',
+            'ndai_messages_propose',
+            'ndai_messages_accept',
+
             # === REFLECTION METRICS ===
             'llm_response_tokens_estimated',
             'llm_response_time_ms',
@@ -1227,7 +1527,15 @@ class StatisticalGameAnalyzer:
             'territories_gained_vs_prev_phase',
             'supply_centers_gained_vs_prev_phase',
             'military_units_gained_vs_prev_phase',
-            'relationships'
+            'relationships_start_phase',
+            'relationships_end_phase',
+
+            # === RELATIONSHIP DISTRIBUTION ===
+            'count_allies',
+            'count_friendly',
+            'count_neutrals',
+            'count_unfriendly',
+            'count_enemies',
         ]
 
         # ensure order columns
@@ -1237,8 +1545,8 @@ class StatisticalGameAnalyzer:
                 col = f"orders_{plural}_{suffix}"
                 if col not in fieldnames:
                     fieldnames.append(col)
+        fieldnames.extend(["orders_supports_self_total", "orders_supports_others_total"])
 
-        
         # Ensure all actual fields are included (in case we missed any)
         actual_fields = set()
         for row in phase_features:
@@ -1300,29 +1608,59 @@ class StatisticalGameAnalyzer:
             'avg_relationship_stability_per_phase', 
             'avg_sentiment_toward_others',
             'avg_sentiment_from_others',
+            'avg_relationship_intensity_per_phase',
+            'avg_relationship_reciprocity',
+            'avg_count_allies_per_phase',
+            'avg_count_friendly_per_phase',
+            'avg_count_neutrals_per_phase',
+            'avg_count_unfriendly_per_phase',
+            'avg_count_enemies_per_phase',
             'avg_response_tokens_per_interaction',
             'avg_territories_controlled_per_phase',
+            'avg_territory_change_per_phase',
             'avg_supply_centers_owned_per_phase',
+            'avg_supply_center_change_per_phase',
             'avg_military_units_per_phase',
+            'avg_military_units_change_per_phase',
             'percent_messages_to_allies_overall',
             'percent_messages_to_enemies_overall',
             'percent_global_vs_private_overall',
 
+            # === POWER CONCENTRATION ===
+            'final_hhi_supply_centers',
+            'final_gini_supply_centers',
+            'final_hhi_territories',
+            'final_gini_territories',
+            'final_hhi_military_units',
+            'final_gini_military_units',
+            'avg_hhi_supply_centers',
+            'avg_gini_supply_centers',
+            'avg_hhi_territories',
+            'avg_gini_territories',
+            'avg_hhi_military_units',
+            'avg_gini_military_units',
+
             # === Diplobench style single scalar game score ===
             'game_score',
+
+            # === COORDINATION ===
+            'coordination_score',
+
+            # === NDAI METRICS (populated only for NDAI games) ===
+            'ndai_messages_continue',
+            'ndai_messages_propose',
+            'ndai_messages_accept',
         ]
 
         # ensure order-total columns
         for ot in self.ORDER_TYPES:
             plural = f"{ot}s" if not ot.endswith("s") else ot
-            base = f"orders_{plural}_total"
             for suffix in ("total", "success", "bounce", "void", "invalid", "success_rate"):
                 col = f"orders_{plural}_{suffix}"
                 if col not in fieldnames:
                     fieldnames.append(col)
+        fieldnames.extend(["orders_supports_self_total", "orders_supports_others_total"])
 
-
-        
         # Ensure all actual fields are included
         actual_fields = set()
         for row in game_features:
@@ -1383,7 +1721,129 @@ class StatisticalGameAnalyzer:
         """Check if status indicates success."""
         status_lower = status.lower()
         return any(indicator in status_lower for indicator in ['true', 'success:', 'success', 'partial'])
-    
+
+    # ────────────────── NDAI HELPERS ──────────────────────────────
+
+    @staticmethod
+    def _is_ndai_game(game_data: dict) -> bool:
+        """Detect whether this game was run in NDAI mode via overview.jsonl."""
+        run_dir = game_data.get("run_dir", "")
+        if not run_dir:
+            return False
+        overview_path = Path(run_dir) / "overview.jsonl"
+        if not overview_path.exists():
+            return False
+        with open(overview_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    if isinstance(obj, dict) and obj.get("ndai") is True:
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _parse_ndai_intents_from_response(self, raw_response: str) -> List[str]:
+        """Extract the list of intent values from an NDAI negotiation raw_response.
+
+        Returns a list like ["CONTINUE", "PROPOSE", "ACCEPT", "CONTINUE"] —
+        one entry per message object found in the JSON array.
+        """
+        intents: List[str] = []
+        text = raw_response.strip()
+
+        # The expected format is a top-level JSON array of message objects.
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                for msg in parsed:
+                    if isinstance(msg, dict):
+                        intents.append(msg.get("intent", "CONTINUE").upper())
+                return intents
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: try to find a JSON array inside markdown fences
+        array_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+        if array_match:
+            try:
+                parsed = json.loads(array_match.group(1))
+                if isinstance(parsed, list):
+                    for msg in parsed:
+                        if isinstance(msg, dict):
+                            intents.append(msg.get("intent", "CONTINUE").upper())
+                    return intents
+            except json.JSONDecodeError:
+                pass
+
+        # Last resort: extract individual JSON objects
+        for json_str in re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text):
+            try:
+                msg = json.loads(json_str)
+                if isinstance(msg, dict) and "content" in msg:
+                    intents.append(msg.get("intent", "CONTINUE").upper())
+            except json.JSONDecodeError:
+                continue
+
+        return intents
+
+    def _extract_ndai_phase_features(self, power: str, phase: str,
+                                     llm_responses: List[dict],
+                                     phase_data: dict,
+                                     game_data: dict) -> dict:
+        """Extract NDAI-specific metrics for one power in one phase.
+
+        Returns zeros for non-NDAI games so the columns are always present.
+        """
+        features = {
+            'ndai_messages_continue': 0,
+            'ndai_messages_propose': 0,
+            'ndai_messages_accept': 0,
+        }
+
+        if not self._is_ndai_game(game_data):
+            return features
+
+        # Parse intents from all negotiation_message responses for this power/phase
+        for response in llm_responses:
+            if (response.get('power') == power and
+                    response.get('phase') == phase and
+                    response.get('response_type') == 'negotiation_message'):
+                for intent in self._parse_ndai_intents_from_response(
+                        response.get('raw_response', '')):
+                    if intent == 'CONTINUE':
+                        features['ndai_messages_continue'] += 1
+                    elif intent == 'PROPOSE':
+                        features['ndai_messages_propose'] += 1
+                    elif intent == 'ACCEPT':
+                        features['ndai_messages_accept'] += 1
+
+        return features
+
+    def _aggregate_ndai_game_features(self, power: str,
+                                      llm_responses: List[dict],
+                                      game_data: dict) -> dict:
+        """Aggregate NDAI metrics across all phases for one power (game level).
+
+        Returns zeros for non-NDAI games so the columns are always present.
+        """
+        totals = {
+            'ndai_messages_continue': 0,
+            'ndai_messages_propose': 0,
+            'ndai_messages_accept': 0,
+        }
+
+        if not self._is_ndai_game(game_data):
+            return totals
+
+        for phase in game_data.get('phases', []):
+            phase_feats = self._extract_ndai_phase_features(
+                power, phase['name'], llm_responses, phase, game_data
+            )
+            for k in totals:
+                totals[k] += phase_feats[k]
+
+        return totals
 
 
 def main():

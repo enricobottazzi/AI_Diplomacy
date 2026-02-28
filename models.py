@@ -14,6 +14,15 @@ _POWER_ALIASES = {
     "Russia": "RUSSIA",
     "Austria": "AUSTRIA",
     "Turkey": "TURKEY",
+    # 3-letter codes
+    "AUT": "AUSTRIA",
+    "AUS": "AUSTRIA",
+    "ENG": "ENGLAND",
+    "FRA": "FRANCE",
+    "GER": "GERMANY",
+    "ITA": "ITALY",
+    "RUS": "RUSSIA",
+    "TUR": "TURKEY",
 }
 
 POWERS_ORDER: List[str] = [

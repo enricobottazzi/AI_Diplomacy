@@ -440,10 +440,13 @@ class BaseModelClient:
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
         agent_private_diary_str: Optional[str] = None,  # Added
+        negotiation_round: Optional[int] = None,
+        max_negotiation_rounds: Optional[int] = None,
+        ndai: bool = False,
     ) -> str:
-        # MINIMAL CHANGE: Just change to load unformatted version conditionally
-        # Check if country-specific prompts are enabled
-        if config.COUNTRY_SPECIFIC_PROMPTS:
+        if ndai:
+            instructions = load_prompt(get_prompt_path("ndai_conversation_instructions.txt"), prompts_dir=self.prompts_dir)
+        elif config.COUNTRY_SPECIFIC_PROMPTS:
             # Try to load country-specific version first
             country_specific_file = get_prompt_path(f"conversation_instructions_{power_name.lower()}.txt")
             instructions = load_prompt(country_specific_file, prompts_dir=self.prompts_dir)
@@ -454,6 +457,8 @@ class BaseModelClient:
         else:
             # Load generic conversation instructions
             instructions = load_prompt(get_prompt_path("conversation_instructions.txt"), prompts_dir=self.prompts_dir)
+        
+        logger.debug(f"[{power_name}] Conversation instructions: {instructions}")
 
         # KEEP ORIGINAL: Use build_context_prompt as before
         context = build_context_prompt(
@@ -467,25 +472,18 @@ class BaseModelClient:
             agent_private_diary=agent_private_diary_str,  # Pass diary string
             prompts_dir=self.prompts_dir,
         )
+        # Insert negotiation round below Power and Phase when available
+        if negotiation_round is not None and max_negotiation_rounds is not None:
+            phase_pos = context.find("Phase:")
+            if phase_pos != -1:
+                end_of_line = context.find("\n", phase_pos)
+                end_of_line = end_of_line if end_of_line != -1 else len(context)
+                round_line = f"\nNegotiation round: round {negotiation_round} out of {max_negotiation_rounds}.\n"
+                context = context[:end_of_line] + round_line + context[end_of_line:]
 
-        # KEEP ORIGINAL: Get recent messages targeting this power to prioritize responses
-        recent_messages_to_power = game_history.get_recent_messages_to_power(power_name, limit=3)
+        logger.debug(f"[{power_name}] Conversation context: {context}")
 
-        # KEEP ORIGINAL: Debug logging to verify messages
-        logger.info(f"[{power_name}] Found {len(recent_messages_to_power)} high priority messages to respond to")
-        if recent_messages_to_power:
-            for i, msg in enumerate(recent_messages_to_power):
-                logger.info(f"[{power_name}] Priority message {i + 1}: From {msg['sender']} in {msg['phase']}: {msg['content'][:50]}...")
-
-        # KEEP ORIGINAL: Add a section for unanswered messages
-        unanswered_messages = "\n\nRECENT MESSAGES REQUIRING YOUR ATTENTION:\n"
-        if recent_messages_to_power:
-            for msg in recent_messages_to_power:
-                unanswered_messages += f"\nFrom {msg['sender']} in {msg['phase']}: {msg['content']}\n"
-        else:
-            unanswered_messages += "\nNo urgent messages requiring direct responses.\n"
-
-        final_prompt = context + unanswered_messages + "\n\n" + instructions
+        final_prompt = context + "\n\n" + instructions
         final_prompt = (
             final_prompt.replace("AUSTRIA", "Austria")
             .replace("ENGLAND", "England")
@@ -547,10 +545,30 @@ class BaseModelClient:
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
         agent_private_diary_str: Optional[str] = None,
+        negotiation_round: Optional[int] = None,
+        max_negotiation_rounds: Optional[int] = None,
+        ndai: bool = False,
     ) -> List[Dict[str, str]]:
         """
         Generates a negotiation message, considering agent state.
         """
+        logger.debug(
+            "get_conversation_reply inputs: game=%s, board_state type=%s (keys=%s), power_name=%s, "
+            "possible_orders keys=%s, game_history=%s, game_phase=%s, log_file_path=%s, "
+            "active_powers=%s, agent_goals=%s, agent_relationships=%s, agent_private_diary_str len=%s",
+            type(game).__name__,
+            type(board_state).__name__,
+            list(board_state.keys()) if isinstance(board_state, dict) else "n/a",
+            power_name,
+            list(possible_orders.keys()) if possible_orders else [],
+            type(game_history).__name__,
+            game_phase,
+            log_file_path,
+            active_powers,
+            agent_goals,
+            agent_relationships,
+            len(agent_private_diary_str) if agent_private_diary_str else 0,
+        )
         raw_input_prompt = ""  # Initialize for finally block
         raw_response = ""  # Initialize for finally block
         success_status = "Failure: Initialized"  # Default status
@@ -566,6 +584,9 @@ class BaseModelClient:
                 agent_goals=agent_goals,
                 agent_relationships=agent_relationships,
                 agent_private_diary_str=agent_private_diary_str,
+                negotiation_round=negotiation_round,
+                max_negotiation_rounds=max_negotiation_rounds,
+                ndai=ndai,
             )
 
             logger.debug(f"[{self.model_name}] Conversation prompt for {power_name}:\n{raw_input_prompt}")
@@ -653,16 +674,17 @@ class BaseModelClient:
                 success_status = "Success: No messages found"
                 # messages_to_return remains empty
             else:
-                # Validate parsed messages
+                # Validate parsed messages: only accept targeted (private) messages with recipient
                 validated_messages = []
                 for msg in parsed_messages:
-                    if isinstance(msg, dict) and "message_type" in msg and "content" in msg:
-                        if msg["message_type"] == "private" and "recipient" not in msg:
-                            logger.warning(f"[{self.model_name}] Private message missing recipient for {power_name}")
-                            continue
-                        validated_messages.append(msg)
-                    else:
+                    if not isinstance(msg, dict) or "content" not in msg:
                         logger.warning(f"[{self.model_name}] Invalid message structure for {power_name}")
+                        continue
+                    msg["message_type"] = "private"
+                    if "recipient" not in msg or not msg.get("recipient"):
+                        logger.warning(f"[{self.model_name}] Private message missing recipient for {power_name}")
+                        continue
+                    validated_messages.append(msg)
                 parsed_messages = validated_messages
 
             # Set final status and return value
@@ -1563,7 +1585,6 @@ def get_visible_messages_for_power(conversation_messages, power_name):
     """
     visible = []
     for msg in conversation_messages:
-        # GLOBAL might be 'ALL' or 'GLOBAL' depending on your usage
-        if msg["recipient"] == "ALL" or msg["recipient"] == "GLOBAL" or msg["sender"] == power_name or msg["recipient"] == power_name:
+        if msg["sender"] == power_name or msg["recipient"] == power_name:
             visible.append(msg)
     return visible  # already in chronological order if appended that way

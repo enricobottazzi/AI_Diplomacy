@@ -1,5 +1,6 @@
 import argparse
 import logging
+import random
 import time
 import dotenv
 import os
@@ -7,7 +8,7 @@ import json
 import asyncio
 from collections import defaultdict
 from argparse import Namespace
-from typing import Dict
+from typing import Dict, List, Tuple
 import shutil
 import sys
 
@@ -21,7 +22,7 @@ os.environ["GRPC_POLL_STRATEGY"] = "poll"  # Use 'poll' for macOS compatibility
 from diplomacy import Game
 
 from ai_diplomacy.utils import get_valid_orders, gather_possible_orders, parse_prompts_dir_arg
-from ai_diplomacy.negotiations import conduct_negotiations
+from ai_diplomacy.negotiations import conduct_negotiations, conduct_ndai_negotiations
 from ai_diplomacy.planning import planning_phase
 from ai_diplomacy.game_history import GameHistory
 from ai_diplomacy.agent import DiplomacyAgent
@@ -29,6 +30,8 @@ from ai_diplomacy.game_logic import (
     save_game_state,
     load_game_state,
     initialize_new_game,
+    serialize_agent,
+    deserialize_agent,
 )
 from ai_diplomacy.diary_logic import run_diary_consolidation
 from config import config
@@ -185,6 +188,19 @@ def parse_arguments():
             "Falls back to generic prompts if country-specific not found."
         ),
     )
+    parser.add_argument(
+        "--ndai",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="When true, use NDAI negotiation logic.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode: log every LLM input and output to the console.",
+    )
 
     return parser.parse_args()
 
@@ -192,6 +208,13 @@ def parse_arguments():
 async def main():
     args = parse_arguments()
     start_whole = time.time()
+
+    # Apply debug flag so all LLM I/O logging can use it, and show existing logger.debug() calls
+    config.DEBUG = getattr(args, "debug", False)
+    if config.DEBUG:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Named loggers (negotiations, utils, etc.) inherit root when they don't set their own level.
+        logger.info("Debug mode enabled: logger.debug() messages and every LLM input/output will be shown.")
 
     logger.info(f"args.simple_prompts = {args.simple_prompts} (type: {type(args.simple_prompts)}), args.prompts_dir = {args.prompts_dir}")
     logger.info(f"config.SIMPLE_PROMPTS before update = {config.SIMPLE_PROMPTS}")
@@ -293,7 +316,7 @@ async def main():
     file_handler = logging.FileHandler(general_log_file_path, mode='a')
     file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s:%(lineno)d] - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG if config.DEBUG else logging.INFO)
     logging.getLogger().addHandler(file_handler)
     logger.info(f"General game logs will be appended to: {general_log_file_path}")
 
@@ -353,17 +376,24 @@ async def main():
         # --- 4b. Pre-Order Generation Steps (Movement Phases Only) ---
         if current_short_phase.endswith("M"):
             if run_config.num_negotiation_rounds > 0:
-                game_history = await conduct_negotiations(
-                    game, agents, game_history, model_error_stats,
-                    max_rounds=run_config.num_negotiation_rounds, log_file_path=llm_log_file_path,
-                )
+                ndai = getattr(run_config, "ndai", False)
+                if ndai:
+                    game_history = await conduct_ndai_negotiations(
+                        game, agents, game_history, model_error_stats,
+                        llm_log_file_path, max_rounds=run_config.num_negotiation_rounds,
+                    )
+                else:
+                    game_history = await conduct_negotiations(
+                        game, agents, game_history, model_error_stats,
+                        max_rounds=run_config.num_negotiation_rounds, log_file_path=llm_log_file_path,
+                    )
             if run_config.planning_phase:
                 await planning_phase(
                     game, agents, game_history, model_error_stats, log_file_path=llm_log_file_path,
                 )
             
             neg_diary_tasks = [
-                agent.generate_negotiation_diary_entry(game, game_history, llm_log_file_path)
+                agent.generate_negotiation_diary_entry(game, game_history, llm_log_file_path, ndai=getattr(run_config, "ndai", False))
                 for agent in agents.values() if not game.powers[agent.power_name].is_eliminated()
             ]
             if neg_diary_tasks:
@@ -470,7 +500,7 @@ async def main():
         # Phase Result Diary Entries
         if current_short_phase.endswith("M"):
             phase_result_diary_tasks = [
-                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase)
+                agent.generate_phase_result_diary_entry(game, game_history, phase_summary, all_orders_this_phase, llm_log_file_path, current_short_phase, ndai=getattr(run_config, "ndai", False))
                 for agent in agents.values() if not game.powers[agent.power_name].is_eliminated()
             ]
             if phase_result_diary_tasks:

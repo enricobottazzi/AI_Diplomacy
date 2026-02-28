@@ -213,7 +213,7 @@ def _plot_relationships_per_game(
     # ── ensure rel_dict column exists ────────────────────────────────────
     if "rel_dict" not in all_phase.columns:
         all_phase = all_phase.copy()
-        all_phase["rel_dict"] = all_phase["relationships"].apply(_parse_relationships)
+        all_phase["rel_dict"] = all_phase["relationships_end_phase"].apply(_parse_relationships)
 
     powers = list(_POWER_COLOUR.keys())          # AUSTRIA … TURKEY
     power_order = {p: i for i, p in enumerate(powers)}
@@ -223,7 +223,7 @@ def _plot_relationships_per_game(
         # ── make sure rel_dict exists ───────────────────────────────
         if "rel_dict" not in game_df.columns:
             game_df = game_df.copy()
-            game_df["rel_dict"] = game_df["relationships"].apply(_parse_relationships)
+            game_df["rel_dict"] = game_df["relationships_end_phase"].apply(_parse_relationships)
 
         # ── NEW: discard rows with no relationship info ────────────
         game_df = game_df[game_df["rel_dict"].apply(bool)]

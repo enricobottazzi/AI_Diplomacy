@@ -463,9 +463,10 @@ class DiplomacyAgent:
     # to improve modularity and avoid circular dependencies.
     # It is now called as `run_diary_consolidation(agent, game, ...)` from the main game loop.
 
-    async def generate_negotiation_diary_entry(self, game: "Game", game_history: GameHistory, log_file_path: str):
+    async def generate_negotiation_diary_entry(self, game: "Game", game_history: GameHistory, log_file_path: str, ndai: bool = False):
         """
         Generates a diary entry summarizing negotiations and updates relationships.
+        When ndai=True, uses joint statements instead of messages for the diary context.
         This method now includes comprehensive LLM interaction logging.
         """
         logger.info(f"[{self.power_name}] Generating negotiation diary entry for {game.current_short_phase}...")
@@ -487,27 +488,40 @@ class DiplomacyAgent:
             units_str, centers_str = get_board_state(board_state_dict, game)
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
-            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=game.current_short_phase)
-            if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
-                messages_this_round = (
-                    "(No messages involving your power this round.)"
+            if ndai:
+                section_label = (
+                    "JOINT STATEMENTS THIS ROUND (each joint statement is signed by you and another power, "
+                    "this information is only available to the signers of the joint statement and not to other powers)"
                 )
+                messages_this_round = game_history.get_joint_statements_this_round(
+                    power_name=self.power_name, current_phase_name=game.current_short_phase
+                )
+            else:
+                section_label = "Messages This Round"
+                messages_this_round = game_history.get_messages_this_round(
+                    power_name=self.power_name, current_phase_name=game.current_short_phase
+                )
+                if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
+                    messages_this_round = "(No messages involving your power this round.)"
 
             current_relationships_str = json.dumps(self.relationships)
             current_goals_str = json.dumps(self.goals)
             formatted_diary = self.format_private_diary_for_prompt()
 
             # Get ignored messages context
-            ignored_messages = game_history.get_ignored_messages_by_power(self.power_name)
-            ignored_context = ""
-            if ignored_messages:
-                ignored_context = "\n\nPOWERS NOT RESPONDING TO YOUR MESSAGES:\n"
-                for power, msgs in ignored_messages.items():
-                    ignored_context += f"{power}:\n"
-                    for msg in msgs[-2:]:  # Show last 2 ignored messages per power
-                        ignored_context += f"  - Phase {msg['phase']}: {msg['content'][:100]}...\n"
+            if ndai == False:
+                ignored_context = ""
             else:
-                ignored_context = "\n\nAll powers have been responsive to your messages."
+                ignored_messages = game_history.get_ignored_messages_by_power(self.power_name)
+                ignored_context = ""
+                if ignored_messages:
+                    ignored_context = "\n\nPOWERS NOT RESPONDING TO YOUR MESSAGES:\n"
+                    for power, msgs in ignored_messages.items():
+                        ignored_context += f"{power}:\n"
+                        for msg in msgs[-2:]:  # Show last 2 ignored messages per power
+                            ignored_context += f"  - Phase {msg['phase']}: {msg['content'][:100]}...\n"
+                else:
+                    ignored_context = "\n\nAll powers have been responsive to your messages."
 
             # Do aggressive preprocessing of the template to fix the problematic patterns
             # This includes removing any newlines or whitespace before JSON keys that cause issues
@@ -522,6 +536,7 @@ class DiplomacyAgent:
                 temp_vars = [
                     "power_name",
                     "current_phase",
+                    "section_label",
                     "messages_this_round",
                     "agent_goals",
                     "agent_relationships",
@@ -545,6 +560,7 @@ class DiplomacyAgent:
                 "power_name": self.power_name,
                 "current_phase": game.current_short_phase,
                 "board_state_str": board_state_str,
+                "section_label": section_label,
                 "messages_this_round": messages_this_round,
                 "agent_relationships": current_relationships_str,
                 "agent_goals": current_goals_str,
@@ -838,7 +854,7 @@ class DiplomacyAgent:
         # Rest of the code remains the same
 
     async def generate_phase_result_diary_entry(
-        self, game: "Game", game_history: "GameHistory", phase_summary: str, all_orders: Dict[str, List[str]], log_file_path: str, phase_name: str
+        self, game: "Game", game_history: "GameHistory", phase_summary: str, all_orders: Dict[str, List[str]], log_file_path: str, phase_name: str, ndai: bool = False
     ):
         try:
             """
@@ -867,12 +883,13 @@ class DiplomacyAgent:
             units_str, centers_str = get_board_state(board_state_dict, game)
             board_state_str = f"Units Held:\n{units_str}\n\nSupply Centers Held:\n{centers_str}"
 
-            # Get recent negotiations for this phase
-            messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=game.current_short_phase)
-            if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
-                messages_this_round = (
-                    "(No messages involving your power this round.)"
-                )
+            # Get recent negotiations for this phase (use phase_name: messages were stored for the completed phase, not game.current_short_phase which has already advanced)
+            if ndai:
+                messages_this_round = game_history.get_joint_statements_this_round(power_name=self.power_name, current_phase_name=phase_name)
+            else:
+                messages_this_round = game_history.get_messages_this_round(power_name=self.power_name, current_phase_name=phase_name)
+                if not messages_this_round.strip() or messages_this_round.startswith("\n(No messages"):
+                    messages_this_round = "(No messages involving your power this round.)"
 
             # Format relationships
             relationships_str = "\n".join([f"{p}: {r}" for p, r in self.relationships.items()])
